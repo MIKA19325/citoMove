@@ -1,4 +1,3 @@
-
 #' @title citoMove - an R package for animal movement analysis using deep learning
 #' @name citoMove
 #' @aliases citoMove-package
@@ -10,6 +9,3 @@
 #' @keywords internal
 "_PACKAGE"
 NULL
-
-
-
