@@ -28,20 +28,6 @@ A list of class \code{"dnn_ssf"} containing the fitted model and metadata.
 Fits a deep neural network step-selection model from a \code{data.frame}
 containing movement steps, covariates, and case/control indicators.
 }
-\details{
-This method constructs the design matrix implied by \code{formula}, prepares the
-response vector, and trains a deep neural network to estimate the conditional
-probabilities of selecting used steps over available alternatives.
-
-The returned object stores:
-\itemize{
-\item The call used to create the model
-\item The original formula
-\item Training data or a processed representation
-\item Training hyperparameters such as batch size
-\item The fitted neural network model
-}
-}
 \examples{
 \dontrun{
 fit <- dnn_ssf(

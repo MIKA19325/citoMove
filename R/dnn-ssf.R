@@ -23,20 +23,6 @@ dnn_ssf <- function(data, ...) {
 #'   `"auto"` (default) or a numeric value.
 #' @inheritDotParams dnn_ssf
 #'
-#' @details
-#' This method constructs the design matrix implied by `formula`, prepares the
-#' response vector, and trains a deep neural network to estimate the conditional
-#' probabilities of selecting used steps over available alternatives.
-#'
-#' The returned object stores:
-#' \itemize{
-#'   \item The call used to create the model
-#'   \item The original formula
-#'   \item Training data or a processed representation
-#'   \item Training hyperparameters such as batch size
-#'   \item The fitted neural network model
-#' }
-#'
 #' @return A list of class `"dnn_ssf"` containing the fitted model and metadata.
 #'
 #' @examples
@@ -50,7 +36,6 @@ dnn_ssf <- function(data, ...) {
 #' predict(fit, newdata = mydata)
 #' }
 #'
-# #' @seealso [dnn_ssf()], [predict.dnn_ssf()], [summary.dnn_ssf()], [cito::dnn()]
 #' @seealso [dnn_ssf()], [cito::dnn()]
 #'
 #' @export
@@ -92,7 +77,9 @@ dnn_ssf.random_steps <- function(data, formula, batchsize = "auto", ...){
     P = P$reshape(list(nrow(pred)/strata_size, strata_size))
     prob = torch::nnf_softmax(P, dim = 2)
     loss = torch::distr_bernoulli(
-      prob = prob)$log_prob(Y$reshape(list(nrow(pred)/strata_size, strata_size)))$negative()$mean()
+      prob = prob)$log_prob(Y$reshape(
+        list(nrow(pred)/strata_size, strata_size))
+      )$negative()$mean()
     return(loss)
   }
 
