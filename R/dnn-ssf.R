@@ -86,7 +86,7 @@ dnn_ssf.random_steps <- function(data, formula, batchsize = "auto", ...){
   fit = cito::dnn(
     formula, data = dat_ssf,  shuffle = FALSE,
     loss = custom_loss, baseloss = FALSE, batchsize = batchsize, plot = FALSE,
-    verbose = FALSE, ...)
+    verbose = FALSE), ...)
 
   class(fit) = c("dnn_ssf", class(fit))
 

@@ -28,13 +28,43 @@ You can install the development version of citoMove from [GitHub](https://github
 devtools::install_github("citoverse/citoMove")
 ```
 
-## Example
+# Examples
 
-This is a basic example which shows you how to solve a common problem:
+## One animal
 
-```{r, eval = F}
 
-DNNmod = citoMove::fitDeepSSF(formula = case_ ~ z, data = Move1FEnv, lr = 1.1)
+```{r}
+library(amt)
+library(citoMove)
+library(terra)
+```
 
-cito::conditionalEffects(DNNmod)
+First we create a new covariate: the distance to the next forest. 
+
+```{r}
+forest <- get_sh_forest()
+forest <- terra::subst(forest, 0, NA)
+forest_dist <- distance(forest)
+names(forest_dist) <- "forest_dist"
+plot(forest_dist)
+```
+
+Then we load the tracking data of one red deer. 
+
+```{r}
+data(deer)
+dat_ssf <- deer |> 
+  steps_by_burst() |> 
+  random_steps() |> 
+  extract_covariates(forest_dist) |> 
+  time_of_day()
+```
+
+And fit a deep neural network (dnn): 
+
+```{r}
+# dnn_ssf(formula = case_ ~ forest_dist, data = dat_ssf)
+# returns error
+# Error in (function (self, shape)  : 
+# shape '[75, 11]' is invalid for input of size 830
 ```
