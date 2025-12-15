@@ -25,16 +25,7 @@ dnn_ssf <- function(data, ...) {
 #'
 #' @return A list of class `"dnn_ssf"` containing the fitted model and metadata.
 #'
-#' @examples
-#' \dontrun{
-#' fit <- dnn_ssf(
-#'   data = mydata,
-#'   formula = case_ ~ sl_ + hab,
-#'   batchsize = 64
-#' )
-#' summary(fit)
-#' predict(fit, newdata = mydata)
-#' }
+#' @example inst/examples/dnn_ssf-example.R
 #'
 #' @seealso [dnn_ssf()], [cito::dnn()]
 #'

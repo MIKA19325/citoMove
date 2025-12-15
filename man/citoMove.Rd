@@ -22,8 +22,9 @@ vignette("citoMove", package="citoMove")
 
 Authors:
 \itemize{
-  \item Thibault Fronville \email{fronville@izw-berlin.de}
-  \item Florian Hartig \email{florian.hartig@biologie.uni-regensburg.de} (\href{https://orcid.org/0000-0002-6255-9059}{ORCID})
+  \item Thibault Fronville
+  \item Florian Hartig (\href{https://orcid.org/0000-0002-6255-9059}{ORCID})
+  \item Johannes Signer
 }
 
 }

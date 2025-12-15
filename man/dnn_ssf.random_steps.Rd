@@ -29,16 +29,18 @@ Fits a deep neural network step-selection model from a \code{data.frame}
 containing movement steps, covariates, and case/control indicators.
 }
 \examples{
-\dontrun{
 fit <- dnn_ssf(
-  data = mydata,
+   data = mydata,
   formula = case_ ~ sl_ + hab,
   batchsize = 64
-)
+ )
 summary(fit)
 predict(fit, newdata = mydata)
-}
 
+
+library(cito)
+?cito
+?citoMove
 }
 \seealso{
 \code{\link[=dnn_ssf]{dnn_ssf()}}, \code{\link[cito:dnn]{cito::dnn()}}
