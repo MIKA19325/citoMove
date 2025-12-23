@@ -1,46 +1,39 @@
-#' @title Fit a Deep Neural Network Step-Selection Function (dnn_ssf)
-#' @description Fits a custom deep neural network using \code{\link{dnn}}.
-#' @param data object of class `random_steps` from the `amt` package.
-#'
-#' @export
-#'
-
-
-dnn_ssf <- function(data, ...) {
-  UseMethod("dnn_ssf")
-}
-
-
 #' DNN-SSF Method for Data Frames
 #'
 #' Fits a deep neural network step-selection model from a `data.frame`
 #' containing movement steps, covariates, and case/control indicators.
 #'
-#' @inheritParams dnn_ssf
 #' @param formula A model formula of the form `case_ ~ cov1 + cov2 + ...`
 #'   specifying the model to be fit.
-#' @param batchsize Batch size used during neural network training. Either
-#'   `"auto"` (default) or a numeric value.
-#' @inheritDotParams dnn_ssf
+#' @param data Data.frame containing the true and random steps, and the covariates.
+#' @param batchsize Batch size (in percent of the data) used during neural network training.
+#' @param n_control Number of pseudo absences.
+#' @param ... Arguments passed on to [cito::dnn()].
 #'
 #' @return A list of class `"dnn_ssf"` containing the fitted model and metadata.
 #'
 #' @example inst/examples/dnn_ssf-example.R
 #'
-#' @seealso [dnn_ssf()], [cito::dnn()]
+#' @seealso [cito::dnn()]
 #'
 #' @export
 
-dnn_ssf.random_steps <- function(data, formula, batchsize = "auto", ...){
+dnn_ssf <- function(formula, data, batchsize = 0.1, n_control = NULL, ...){
 
-  # Additional parameters
-  n_control <- attr(data, "n_control")
-  strata_size <- n_control + 1
+  # Additional parameters # Aber das impliziert ja dass nur data.frames aus amt gefittet werden können?
+
+  if(inherits(data, "random_steps")) n_control = attr(data, "n_control")
+
+  if(is.null(n_control)) {
+      stop("The number of pseudo absences is unknown, please provide this using the 'n_control' argument.")
+  }
+  n_control = n_control + 1
+  strata_size <- n_control
 
   # Validate input
   # Check for no NA in the data
   if(!all(complete.cases(data[, all.vars(formula)]))) {
-    message("Some observations contain missing data points.")
+    stop("Some observations contain missing data points.") # Do not run with missing data.
     data <-  data[complete.cases(data[, all.vars(formula)]), ]
   }
 
@@ -51,16 +44,8 @@ dnn_ssf.random_steps <- function(data, formula, batchsize = "auto", ...){
     data <- subset(data, ave(step_id_, step_id_, FUN = length) == strata_size)
   }
 
-  if(is.numeric(batchsize)) {
-    batchsize = batchsize * n_control
-    message("Batchsize = ", batchsize)
-  }
-
-  if(batchsize == "auto") {
-    n = 0.1 * nrow(data) + n_control / 2
-    batchsize = n - (n %% n_control)
-    message("Batchsize equals to 10% of data = ", batchsize)
-  }
+  n = batchsize * nrow(data) + n_control / 2
+  batchsize = n - (n %% n_control)
 
   custom_loss = function(pred, true) {
     Y = true[,1]
@@ -73,11 +58,9 @@ dnn_ssf.random_steps <- function(data, formula, batchsize = "auto", ...){
       )$negative()$mean()
     return(loss)
   }
-
   fit = cito::dnn(
-    formula, data = dat_ssf,  shuffle = FALSE,
-    loss = custom_loss, baseloss = FALSE, batchsize = batchsize, plot = FALSE,
-    verbose = FALSE, ...)
+    formula, data = data,  shuffle = FALSE,
+    loss = custom_loss, baseloss = FALSE, batchsize = batchsize, ...)
 
   class(fit) = c("dnn_ssf", class(fit))
 

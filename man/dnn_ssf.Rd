@@ -2,13 +2,43 @@
 % Please edit documentation in R/dnn-ssf.R
 \name{dnn_ssf}
 \alias{dnn_ssf}
-\title{Fit a Deep Neural Network Step-Selection Function (dnn_ssf)}
+\title{DNN-SSF Method for Data Frames}
 \usage{
-dnn_ssf(data, ...)
+dnn_ssf(formula, data, batchsize = 0.1, n_control = NULL, ...)
 }
 \arguments{
-\item{data}{object of class \code{random_steps} from the \code{amt} package.}
+\item{formula}{A model formula of the form \code{case_ ~ cov1 + cov2 + ...}
+specifying the model to be fit.}
+
+\item{data}{Data.frame containing the true and random steps, and the covariates.}
+
+\item{batchsize}{Batch size (in percent of the data) used during neural network training.}
+
+\item{n_control}{Number of pseudo absences.}
+
+\item{...}{Arguments passed on to \code{\link[cito:dnn]{cito::dnn()}}.}
+}
+\value{
+A list of class \code{"dnn_ssf"} containing the fitted model and metadata.
 }
 \description{
-Fits a custom deep neural network using \code{\link{dnn}}.
+Fits a deep neural network step-selection model from a \code{data.frame}
+containing movement steps, covariates, and case/control indicators.
+}
+\examples{
+fit <- dnn_ssf(
+   data = mydata,
+  formula = case_ ~ sl_ + hab,
+  batchsize = 64
+ )
+summary(fit)
+predict(fit, newdata = mydata)
+
+
+library(cito)
+?cito
+?citoMove
+}
+\seealso{
+\code{\link[cito:dnn]{cito::dnn()}}
 }

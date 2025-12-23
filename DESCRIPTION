@@ -30,7 +30,8 @@ Suggests:
 Config/testthat/edition: 3
 Imports: 
     amt,
-    raster
+    raster,
+    torch
 VignetteBuilder: knitr
 Depends: 
     R (>= 3.5),

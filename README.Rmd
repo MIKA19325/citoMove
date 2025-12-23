@@ -63,5 +63,6 @@ dat_ssf <- deer |>
 And fit a deep neural network (dnn): 
 
 ```{r}
-dnn_ssf(formula = case_ ~ forest_dist, data = dat_ssf)
+model = dnn_ssf(case_ ~ forest_dist, data = dat_ssf, epoch = 200L, plot = FALSE, verbose = FALSE)
+summary(model)
 ```
