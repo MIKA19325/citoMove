@@ -21,12 +21,22 @@ The goal of citoMove is to provide an user-friendly R package for analyzing move
 
 ## Installation
 
-You can install the development version of citoMove from [GitHub](https://github.com/) via:
+The current version of citoMove depends on the **development** version of cito, which can be installed via:
+
 
 ```{r, eval = F}
 # install.packages("devtools")
+devtools::install_github('citoverse/cito')
+```
+
+
+You can install the development version of citoMove from [GitHub](https://github.com/) via:
+
+```{r, eval = F}
 devtools::install_github("citoverse/citoMove")
 ```
+
+
 
 # Examples
 
@@ -57,7 +67,8 @@ dat_ssf <- deer |>
   steps_by_burst() |> 
   random_steps() |> 
   extract_covariates(forest_dist) |> 
-  time_of_day()
+  time_of_day() |> 
+  mutate(case_ = as.integer(case_))
 ```
 
 And fit a deep neural network (dnn): 
@@ -66,3 +77,5 @@ And fit a deep neural network (dnn):
 model = dnn_ssf(case_ ~ forest_dist, data = dat_ssf, epoch = 200L, plot = FALSE, verbose = FALSE)
 summary(model)
 ```
+
+
