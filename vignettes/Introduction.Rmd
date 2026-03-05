@@ -1,7 +1,7 @@
 ---
 title: "Introduction to citoMove"
 author: "Thibault Fronville & Maximilian Pichler"
-date: "14.06.2024"
+date: "March 05 2026"
 abstract: "'citoMove' allows you to prepare movement data (including biotic and abiotic interactions) and build neural networks (NN) using the 'cito' package"
 output: rmarkdown::html_vignette
 vignette: >
@@ -9,7 +9,6 @@ vignette: >
   %\VignetteEncoding{UTF-8}
   %\VignetteEngine{knitr::rmarkdown}
 editor_options: 
-  
   chunk_output_type: console
 ---
 
@@ -21,6 +20,7 @@ knitr::opts_chunk$set(
 ```
 
 
+
 # First steps
 
 Assuming you have citoMove installed (for instructions, see [here](https://github.com/citoverse/citoMove)), load the citoMove package via
@@ -30,5 +30,67 @@ library(citoMove)
 ```
 
 In case you have installation problems of citoMove, please follow the instructions given in the [cito package vignette](https://cran.r-project.org/web/packages/cito/vignettes/A-Introduction_to_cito.html)
+
+
+# Example analysis using the amt::deer dataset
+
+```{r}
+set.seed(123)
+library(amt)
+library(citoMove)
+library(terra)
+```
+
+The following code creates a spatial covariate: the distance to the next forest.
+
+```{r}
+forest <- amt::get_sh_forest()
+forest <- terra::subst(forest, 0, NA)
+forest_dist <- distance(forest)
+names(forest_dist) <- "forest_dist"
+plot(forest_dist)
+```
+
+Next, we load the tracking data of one red deer individual. From amt documentation: 826 GPS relocations of one red deer from northern Germany. The data is already resampled to a regular time interval of 6 hours and the coordinate reference system is transformed to epsg:3035.
+
+The follwoing code orders the data, creates random absences, and extract the environmental predictor (distance to forest) create before for all true and random steps. 
+
+```{r}
+dat_ssf <- amt::deer |> 
+  steps_by_burst() |> 
+  random_steps() |> 
+  extract_covariates(forest_dist) |> 
+  time_of_day() |> 
+  mutate(case_ = as.integer(case_))
+```
+
+Now, we can fit the deep neural network (dnn) using citoMove: 
+
+```{r}
+model = dnn_ssf(case_ ~ forest_dist, data = dat_ssf, epoch = 30L, plot = T, verbose = FALSE)
+```
+
+The plot that is produced visualizes the improvement of the model during training. The default architecture of the neural networks entails two hidden layers. We can visualize the architecture via 
+
+```{r, message=F}
+plot(model)
+```
+
+A summary of the fitted model is provided via 
+
+```{r}
+summary(model)
+```
+
+The cito package contains several options to create effect plots. Our current recommendation is to use accumulated local effect (ALE) plots to visualize the estimated selection effects
+
+```{r}
+ALE(model)
+```
+
+
+
+
+
 
 

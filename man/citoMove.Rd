@@ -15,7 +15,7 @@ See index / vignette for details
 vignette("citoMove", package="citoMove")
 }
 \seealso{
-\code{\link{fitDeepSSF}}
+\code{\link{dnn_ssf}}
 }
 \author{
 \strong{Maintainer}: Maximilian Pichler \email{maximilian.pichler@biologie.uni-regensburg.de} (\href{https://orcid.org/0000-0003-2252-8327}{ORCID})
@@ -24,7 +24,7 @@ Authors:
 \itemize{
   \item Thibault Fronville
   \item Florian Hartig (\href{https://orcid.org/0000-0002-6255-9059}{ORCID})
-  \item Johannes Signer
+  \item Johannes Signer (\href{https://orcid.org/0000-0002-1771-7775}{ORCID})
 }
 
 }

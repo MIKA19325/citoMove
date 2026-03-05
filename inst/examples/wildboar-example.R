@@ -28,3 +28,5 @@ dat_ssf <- deer |>
 
 model = dnn_ssf(case_ ~ forest_dist, data = dat_ssf, epoch = 10L, plot = FALSE, verbose = FALSE)
 summary(model)
+
+

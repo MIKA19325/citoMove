@@ -26,18 +26,36 @@ Fits a deep neural network step-selection model from a \code{data.frame}
 containing movement steps, covariates, and case/control indicators.
 }
 \examples{
-fit <- dnn_ssf(
-   data = mydata,
-  formula = case_ ~ sl_ + hab,
-  batchsize = 64
- )
-summary(fit)
-predict(fit, newdata = mydata)
+library(amt)
+library(citoMove)
+library(terra)
+
+data(wildboar)
+str(wildboar)
+
+# create a new covariate: the distance to the next forest.
+
+forest <- amt::get_sh_forest()
+forest <- terra::subst(forest, 0, NA)
+forest_dist <- distance(forest)
+names(forest_dist) <- "forest_dist"
+plot(forest_dist)
+
+# Load the tracking data of a red deer, create random steps, extract covariate
+
+data(deer)
+dat_ssf <- deer |>
+  steps_by_burst() |>
+  random_steps() |>
+  extract_covariates(forest_dist) |>
+  time_of_day() |>
+  mutate(case_ = as.integer(case_))
 
 
-library(cito)
-?cito
-?citoMove
+# Fit a deep neural network (dnn):
+
+model = dnn_ssf(case_ ~ forest_dist, data = dat_ssf, epoch = 10L, plot = FALSE, verbose = FALSE)
+summary(model)
 }
 \seealso{
 \code{\link[cito:dnn]{cito::dnn()}}

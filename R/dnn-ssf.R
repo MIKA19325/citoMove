@@ -32,7 +32,7 @@ dnn_ssf <- function(formula, data, batchsize = 0.1, n_control = NULL, ...){
 
   # Validate input
   # Check for no NA in the data
-  if(!all(complete.cases(data[, all.vars(formula)]))) {
+  if(!all(stats::complete.cases(data[, all.vars(formula)]))) {
     stop("Some observations contain missing data points.") # Do not run with missing data.
     data <-  data[complete.cases(data[, all.vars(formula)]), ]
   }
@@ -41,7 +41,7 @@ dnn_ssf <- function(formula, data, batchsize = 0.1, n_control = NULL, ...){
   if(!all(table(data$step_id_) == strata_size)) {
     message(paste0("Not all strata contain ", strata_size,  " data points."))
     # Remove strata with
-    data <- subset(data, ave(step_id_, step_id_, FUN = length) == strata_size)
+    data <- subset(data, stats::ave(step_id_, step_id_, FUN = length) == strata_size)
   }
 
   n = batchsize * nrow(data) + n_control / 2

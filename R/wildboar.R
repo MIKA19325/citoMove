@@ -26,7 +26,5 @@
 #' Perception and Tolerate Disturbance*. *Frontiers in Ecology and Evolution*,
 #' 5:157. https://doi.org/10.3389/fevo.2017.00157. :contentReference[oaicite:3]{index=3}
 #'
-#' @examples
-#' data(wildboar)
-#' dplyr::glimpse(wildboar)
+#' @example inst/examples/wildboar-example.R
 "wildboar"
