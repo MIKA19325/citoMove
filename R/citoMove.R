@@ -5,7 +5,7 @@
 #' @details See index / vignette for details
 #' @seealso \code{\link{dnn_ssf}}
 #' @examples
-#' vignette("citoMove", package="citoMove")
+#' vignette("Introduction", package="citoMove")
 #' @keywords internal
 "_PACKAGE"
 NULL
