@@ -2,7 +2,8 @@
 #'
 #' @description Generates a simulated habitat layer with random fragments of one binary habitat variable.
 #'
-#' @param size square side length of the simulated layer with the coordinates (0,0) in the middle of the square. Must be a positive value
+#' @param sizeX side length of the x-achsis of the simulated layer with x = 0 in the middle of the achsis. Must be a positive value
+#' @param sizeY side length of the y-achsis of the simulated layer with y = 0 in the middle of the achsis. Must be a positive value
 #' @param resolution resolution of the simulated layer
 #' @param clustering clustering of the habitat variable. Must be smaller then 1/3 of the size.
 #' @param ratio ratio of the layer area covered by the habitat
@@ -10,23 +11,24 @@
 #' @param colour colour of the layer in the plot
 #'
 #' @details
-#' Examplary values as default: size = 200, resolution = 1, clustering = 15, ratio = 0.5, plot = TRUE, colour = "darkgreen"
+#' Examplary values as default: sizeX = 200, sizeY = 200, resolution = 1, clustering = 15, ratio = 0.5, plot = TRUE, colour = "darkgreen"
 #' As computing time scales directly with number of cells and number of cells grows exponentially with size as well as resolution, these parameters are to be kept as small as possible.
 #' The clustering is computed as the standard deviation of a Gauss distribution in map units and therefore must be significantly (max. 3 times smaller) than the size of the raster layer. Big clustering values also extend computing time.
 #'
 #' @export
 #' @author Mika Schubert
 
-simulateLayer <- function(size = 200,
+simulateLayer <- function(sizeX = 200,
+                          sizeY = 200,
                           resolution = 1,
                           clustering = 15,
                           ratio = 0.5,
                           colour = "darkgreen"){
 
   resolution <- 1/resolution
-  r <- terra::rast(ncols = size / resolution,
-                   nrows = size / resolution,
-                   ext = terra::ext(-0.5 * size, 0.5 * size, -0.5 * size, 0.5 * size))
+  r <- terra::rast(ncols = sizeX / resolution,
+                   nrows = sizeY / resolution,
+                   ext = terra::ext(-0.5 * sizeX, 0.5 * sizeX, -0.5 * sizeY, 0.5 * sizeY))
   terra::values(r) <- stats::rnorm(terra::ncell(r))
 
   r_smooth <- terra::focal(r, w = terra::focalMat(r, clustering, "Gauss"),
@@ -86,7 +88,13 @@ simulateTrack <- function(xStart = 0,
 
   if(is.null(numericLayers)) {numericLayers <- list(simulateLayer())}
 
-  rasters <- numericLayers
+  xminAll <- max(sapply(numericLayers, function(l) terra::ext(l)[1]))
+  xmaxAll <- min(sapply(numericLayers, function(l) terra::ext(l)[2]))
+  yminAll <- max(sapply(numericLayers, function(l) terra::ext(l)[3]))
+  ymaxAll <- min(sapply(numericLayers, function(l) terra::ext(l)[4]))
+  extAll  <- terra::ext(xminAll, xmaxAll, yminAll, ymaxAll)
+
+  rasters <- lapply(numericLayers, function(l) terra::crop(l, extAll))
 
   layerColours <- sapply(numericLayers, function(x) attr(x, "layerColour"))
 
@@ -145,7 +153,7 @@ simulateTrack <- function(xStart = 0,
                            stepID = stepID)
 
   attr(track, "trackColour") <- colour
-  attr(track, "layers")      <- numericLayers
+  attr(track, "layers")      <- rasters
 
   return(track)
 }

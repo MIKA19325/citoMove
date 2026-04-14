@@ -2,8 +2,8 @@ library(terra)
 library(amt)
 
 # simulate layers
-layer1 <- simulateLayer(size = 200, clustering = 15, ratio = 0.5, colour = "darkgreen")
-layer2 <- simulateLayer(size = 200, clustering = 20, ratio = 0.3, colour = "steelblue")
+layer1 <- simulateLayer(sizeX = 200, sizeY = 150, clustering = 15, ratio = 0.5, colour = "darkgreen")
+layer2 <- simulateLayer(sizeX = 150, sizeY = 200, clustering = 20, ratio = 0.3, colour = "steelblue")
 
 # simulate tracks
 track1 <- simulateTrack(xStart = 0,
