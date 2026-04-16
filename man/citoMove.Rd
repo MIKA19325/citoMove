@@ -12,7 +12,7 @@ The 'citoMove' package builds upon the the step selection function framework as 
 See index / vignette for details
 }
 \examples{
-vignette("citoMove", package="citoMove")
+vignette("Introduction", package="citoMove")
 }
 \seealso{
 \code{\link{dnn_ssf}}

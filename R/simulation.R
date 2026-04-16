@@ -1,50 +1,3 @@
-#' @title Simulate Habitat Layer
-#'
-#' @description Generates a simulated habitat layer with random fragments of one binary habitat variable.
-#'
-#' @param sizeX side length of the x-achsis of the simulated layer with x = 0 in the middle of the achsis. Must be a positive value
-#' @param sizeY side length of the y-achsis of the simulated layer with y = 0 in the middle of the achsis. Must be a positive value
-#' @param resolution resolution of the simulated layer
-#' @param clustering clustering of the habitat variable. Must be smaller then 1/3 of the size.
-#' @param ratio ratio of the layer area covered by the habitat
-#' @param plot if TRUE plot will be generated, if FALSE no plot will be generated
-#' @param colour colour of the layer in the plot
-#'
-#' @details
-#' Examplary values as default: sizeX = 200, sizeY = 200, resolution = 1, clustering = 15, ratio = 0.5, plot = TRUE, colour = "darkgreen"
-#' As computing time scales directly with number of cells and number of cells grows exponentially with size as well as resolution, these parameters are to be kept as small as possible.
-#' The clustering is computed as the standard deviation of a Gauss distribution in map units and therefore must be significantly (max. 3 times smaller) than the size of the raster layer. Big clustering values also extend computing time.
-#'
-#' @export
-#' @author Mika Schubert
-
-simulateLayer <- function(sizeX = 200,
-                          sizeY = 200,
-                          resolution = 1,
-                          clustering = 15,
-                          ratio = 0.5,
-                          colour = "darkgreen"){
-
-  resolution <- 1/resolution
-  r <- terra::rast(ncols = sizeX / resolution,
-                   nrows = sizeY / resolution,
-                   ext = terra::ext(-0.5 * sizeX, 0.5 * sizeX, -0.5 * sizeY, 0.5 * sizeY))
-  terra::values(r) <- stats::rnorm(terra::ncell(r))
-
-  r_smooth <- terra::focal(r, w = terra::focalMat(r, clustering, "Gauss"),
-                           na.policy = "omit",
-                           expand = TRUE)
-
-  threshold <- stats::quantile(terra::values(r_smooth), 1-ratio, na.rm=TRUE)
-  hab <- r_smooth >= threshold
-
-  names(hab) <- colour
-  attr(hab, "layerColour") <- colour
-
-  return(hab)
-}
-
-
 
 #' @title Simulate Animal Tracks
 #'
@@ -63,12 +16,14 @@ simulateLayer <- function(sizeX = 200,
 #' @param numericLayers a list of the numeric raster layers
 #' @param rasterLayers a list of the raster layers of the habitat variables. Must be in form rasterLayers = list(...)
 #' @param betas a vector of the preference values of the habitat variables. Must be same length as the list of numericLayers
+#' @param imageKernelsDimensions description
 #'
 #' @details
 #' Examplary values as default: xStart = 0, yStart = 0, tStart = as.POSIXct("2026-01-01 00:00:00",tz = "UTC"), angleStart = 0, nSteps = 100, nChoiceSet = 10, scaleSL = 2, shapeSL = 2, kappaTA = 2, numericLayers = list(simulateLayer()), betas = c(-3)
 #'
-#' @example inst/examples/
+#' @example inst/examples/simulation-example.R
 #'
+#' @export
 #' @author Mika Schubert
 
 
@@ -81,22 +36,25 @@ simulateTrack <- function(xStart = 0,
                           scaleSL = 2,
                           shapeSL = 2,
                           kappaTA = 2,
-                          colour = "black",
                           numericLayers = NULL,
+                          betas = c(-3),
                           imageLayers = NULL,
-                          betas = c(-3)){
+                          imageKernelDimensions = c(3),
+                          imageKernelFunctions = list(f1 = mean))
+{
 
-  if(is.null(numericLayers)) {numericLayers <- list(simulateLayer())}
+  if (is.null(numericLayers)) stop("numericLayers must be provided")
+  if (!inherits(numericLayers, "SpatRasterCollection")) stop("numericLayers must be of class 'SpatRasterCollection'")
+  if (!inherits(tStart, "POSIXct")) stop("tStart must be of class 'POSIXct'")
 
-  xminAll <- max(sapply(numericLayers, function(l) terra::ext(l)[1]))
-  xmaxAll <- min(sapply(numericLayers, function(l) terra::ext(l)[2]))
-  yminAll <- max(sapply(numericLayers, function(l) terra::ext(l)[3]))
-  ymaxAll <- min(sapply(numericLayers, function(l) terra::ext(l)[4]))
+  rasterList <- terra::as.list(numericLayers)
+
+  xminAll <- max(sapply(rasterList, function(l) terra::ext(l)[1]))
+  xmaxAll <- min(sapply(rasterList, function(l) terra::ext(l)[2]))
+  yminAll <- max(sapply(rasterList, function(l) terra::ext(l)[3]))
+  ymaxAll <- min(sapply(rasterList, function(l) terra::ext(l)[4]))
   extAll  <- terra::ext(xminAll, xmaxAll, yminAll, ymaxAll)
-
-  rasters <- lapply(numericLayers, function(l) terra::crop(l, extAll))
-
-  layerColours <- sapply(numericLayers, function(x) attr(x, "layerColour"))
+  rasters <- lapply(rasterList, function(l) terra::crop(l, extAll))
 
   simData <- tibble::tibble(stepID    = 0:nSteps,
                             x_        = numeric(nSteps + 1),
@@ -147,78 +105,57 @@ simulateTrack <- function(xStart = 0,
 
   simData$t_ <- seq(from = tStart, by = "hour", length.out = nrow(simData))
 
-  track <- amt::make_track(simData, x_, y_, t_,
-                           SL = SL, Direction = Direction,
-                           Change = Change, habitat = habitat,
-                           stepID = stepID)
-
-  attr(track, "trackColour") <- colour
-  attr(track, "layers")      <- rasters
+  track <- amt::make_track(simData, x_, y_, t_)
 
   return(track)
 }
 
 
-
-#' @title Merge Tracks
+#' @title Plot SpatRasterCollection
 #'
-#' @description Merges multiple tracks. The habitat variable layers of the tracks have to be identical
+#' @description Plots an object of class 'SpatRasterCollection'
 #'
-#' @export
-#' @author Mika Schubert
-
-mergeTracks <- function(...){
-
-  tracks <- list(...)
-
-  trackData <- do.call(rbind, lapply(seq_along(tracks), function(i){
-    df             <- as.data.frame(tracks[[i]])
-    df$trackID     <- i
-    df$trackColour <- attr(tracks[[i]], "trackColour")
-    df
-  }))
-
-  layers <- attr(tracks[[1]], "layers")
-
-  simulation <- tibble::tibble(tracks = list(trackData), layer = list(layers))
-  class(simulation) <- "citoMoveSimulation"
-
-  return(simulation)
-}
-
-
-
-#' @title Plot Simulated Objects
+#' @param x object of class 'SpatRasterCollection'
+#' @param colours vector of colours of the layers. Must be same length as number of layers
+#' @param onlyoverlap if TRUE only overlap of all layers will be plotted. If FALSE whole layers will be plotted
 #'
-#' @description Plots a single object of class 'citoMoveSimulation'.
-#'
-#' @param x object of class citoMoveSimulation
+#' @example inst/examples/simulation-example.R
 #'
 #' @export
 #' @author Mika Schubert
 
-plot.citoMoveSimulation <- function(x) {
+plotSpatRasterCollection <- function(x, colours, onlyoverlap = TRUE) {
 
-  layers    <- x$layer[[1]]
-  trackData <- x$tracks[[1]]
-  trackIDs  <- unique(trackData$trackID)
-  layerColours <- sapply(layers, function(l) attr(l, "layerColour"))
+  rasterList <- terra::as.list(x)
+  if(missing(colours)) {colours <- sample(colors(),length(rasterList))}
 
-  terra::plot(layers[[1]], col = c(NA, layerColours[1]),
-              legend = FALSE, alpha = 1/length(layers))
-  if(length(layers) > 1) {
-    for(l in 2:length(layers)){
-      terra::plot(layers[[l]], col = c(NA, layerColours[l]),
-                  legend = FALSE, alpha = 1/length(layers), add = TRUE)
-    }
+  if(onlyoverlap == TRUE){
+    xminAll <- max(sapply(rasterList, function(l) terra::ext(l)[1]))
+    xmaxAll <- min(sapply(rasterList, function(l) terra::ext(l)[2]))
+    yminAll <- max(sapply(rasterList, function(l) terra::ext(l)[3]))
+    ymaxAll <- min(sapply(rasterList, function(l) terra::ext(l)[4]))
+    extAll  <- terra::ext(xminAll, xmaxAll, yminAll, ymaxAll)
+    rasterList <- lapply(rasterList, function(l) terra::crop(l, extAll))
+
+  } else {
+    xminAll <- min(sapply(rasterList, function(l) terra::ext(l)[1]))
+    xmaxAll <- max(sapply(rasterList, function(l) terra::ext(l)[2]))
+    yminAll <- min(sapply(rasterList, function(l) terra::ext(l)[3]))
+    ymaxAll <- max(sapply(rasterList, function(l) terra::ext(l)[4]))
+    extAll  <- terra::ext(xminAll, xmaxAll, yminAll, ymaxAll)
   }
 
-  for(m in trackIDs){
-    dat         <- trackData[trackData$trackID == m, ]
-    trackColour <- dat$trackColour[1]
-    lines(dat$x_, dat$y_, col = trackColour)
-    points(dat$x_[1], dat$y_[1], pch = 16, col = trackColour)
-  }
+
+  terra::plot(rasterList[[1]],
+              ext = extAll,
+              col = if(length(unique(terra::values(rasterList[[1]]))) == 2){c(adjustcolor(NA, alpha = 0), adjustcolor(colours[1], alpha = 1/length(rasterList)))}else{adjustcolor(colorRampPalette(c("white", colours[1]))(100), alpha = 1/length(rasterList))},
+              legend = FALSE)
+  if(length(rasterList) > 1) {
+    for(l in 2:length(rasterList)){
+      terra::plot(rasterList[[l]],
+                  ext = extAll,
+                  col = if(length(unique(terra::values(rasterList[[l]]))) == 2){c(adjustcolor(NA, alpha = 0), adjustcolor(colours[l], alpha = 1/length(rasterList)))}else{adjustcolor(colorRampPalette(c("white", colours[l]))(100), alpha = 1/length(rasterList))},
+                  legend = FALSE,
+                  add = TRUE)
+    }}
 }
-
-
