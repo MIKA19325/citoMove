@@ -18,7 +18,7 @@
 #'   (seconds) or one of: "sec", "min", "hour", "day", "week", "month", "quarter", "year".
 #'   Default: "hour".
 #' @param angleStart numeric. Starting direction of movement in degrees clockwise from
-#'   due north. Must be in (0, 3609. Default: 0.
+#'   due north. Must be in (0, 360). Default: 0.
 #' @param nSteps positive integer. Number of steps to simulate. Default: 100.
 #' @param nChoiceSet positive integer. Number of candidate steps drawn at each step
 #'   (i.e. size of the choice set). Larger values increase accuracy but slow simulation.
@@ -64,7 +64,10 @@
 #' on the same scale (i. e. \code{scaleNumericLayers} and \code{scaleImageLayers} are both TRUE).
 #'
 #'
-#' @example inst/examples/simulation-example.R
+#' @examples
+#' \dontrun{
+#' # see system.file("examples/simulation-example.R", package = "citoMove")
+#' }
 #'
 #' @export
 #' @author Mika Schubert
@@ -99,12 +102,12 @@ simulateTrack <- function(xStart = 0,
   if (!is.numeric(nSteps) || length(nSteps) != 1 || nSteps != floor(nSteps) || nSteps <= 0) stop("nSteps must be a single positive integer")
   if (!is.numeric(nChoiceSet) || length(nChoiceSet) != 1 || nChoiceSet != floor(nChoiceSet) || nChoiceSet <= 0) stop("nChoiceSet must be a single positive integer")
   if (!is.numeric(scaleSL) || length(scaleSL) != 1 || scaleSL <= 0) stop("scaleSL must be a single positive number")
-  if (!is.numeric(shapeSL) || length(shapeSL) != 1 || shapeSL <= 0) stop("scaleSL must be a single positive number")
+  if (!is.numeric(shapeSL) || length(shapeSL) != 1 || shapeSL <= 0) stop("shapeSL must be a single positive number")
   if (!is.numeric(kappaTA) || length(kappaTA) != 1 || kappaTA < 0) stop("kappaTA must be a single non-negative number")
+  if (length(rasterList) == 0) stop("at least one layer must be provided")
   if (length(rasterList) > 1) {
     if (!all(sapply(rasterList[-1], function(l) terra::crs(l) == terra::crs(rasterList[[1]]))))
       stop("All layers must have the same CRS")}
-  if (is.null(rasterList)) stop("at least one layer must be provided")
   if (!is.null(numericLayers)) {
     if (!inherits(numericLayers, "SpatRasterCollection")) stop("numericLayers must be of class 'SpatRasterCollection'")
     if (length(betas) != length(terra::as.list(numericLayers))) stop("betas must have one entry per numericLayer")
@@ -142,7 +145,7 @@ simulateTrack <- function(xStart = 0,
   } else {imageRasters <- list()}
 
 
-# Adding imageLayer if present: (cutting to size and scaling)
+# Adding numericLayer if present: (cutting to size and scaling)
   if (!is.null(numericLayers)) {
     numericRasterList <- terra::as.list(numericLayers)
     numericRasters <- lapply(numericRasterList, function(l) {
@@ -177,6 +180,7 @@ simulateTrack <- function(xStart = 0,
     })
   }
 
+
 # Kernel value calculation helper function:
   computeImageValues <- function(x, y) {
     if (length(imageRasters) == 0) return(rep(0, length(x)))
@@ -188,6 +192,7 @@ simulateTrack <- function(xStart = 0,
       )
     }))
   }
+
 
 # Initializing tibble and starting point:
   simData <- tibble::tibble(stepID    = 0:nSteps,
@@ -205,6 +210,7 @@ simulateTrack <- function(xStart = 0,
 
   numVal_start <- sum(sapply(seq_along(numericRasters), function(k)
     betas[[k]] * terra::extract(numericRasters[[k]], cbind(simData$x_[1], simData$y_[1]))[, 1]))
+
   imgVal_start <- computeImageValues(simData$x_[1], simData$y_[1])
   simData$habitat[1] <- numVal_start + imgVal_start
 
@@ -223,19 +229,22 @@ simulateTrack <- function(xStart = 0,
 
     numLinpred <- Reduce("+", lapply(seq_along(numericRasters), function(k)
       betas[[k]] * terra::extract(numericRasters[[k]], cbind(xToro, yToro))[, 1]))
+
     imgLinpred <- computeImageValues(xToro, yToro)
     linpred    <- numLinpred + imgLinpred
 
-    linpred <- linpred - max(linpred)
-    p       <- exp(linpred) / sum(exp(linpred))
+    rawLinpred <- linpred
+    linpred    <- linpred - max(linpred)
+    p          <- exp(linpred) / sum(exp(linpred))
     multinom   <- stats::rmultinom(1, size = 1, prob = p)
     chosenStep <- which(multinom == 1)
+
     simData$x_[i + 1]        <- x[chosenStep]
     simData$y_[i + 1]        <- y[chosenStep]
     simData$SL[i + 1]        <- SLrel[chosenStep]
     simData$Direction[i + 1] <- Direction[chosenStep]
     simData$Change[i + 1]    <- Change[chosenStep]
-    simData$habitat[i+1]     <- linpred[chosenStep] + max(linpred)
+    simData$habitat[i+1]     <- rawLinpred[chosenStep]
 
     if (i %% 1000 == 0) message("Step ", i, "/", nSteps)
   }
@@ -261,9 +270,12 @@ simulateTrack <- function(xStart = 0,
 #'   is plotted. If FALSE, the full extent of all layers is used and non-overlapping
 #'   areas appear empty.
 #'
-#' @return None. Onlyy for producing plot
+#' @return None. Only for producing plot.
 #'
-#' @example inst/examples/simulation-example.R
+#' @examples
+#' \dontrun{
+#' # see system.file("examples/simulation-example.R", package = "citoMove")
+#' }
 #'
 #' @export
 #' @author Mika Schubert
@@ -273,7 +285,7 @@ plotSpatRasterCollection <- function(x, colours, onlyoverlap = TRUE) {
   if (!inherits(x, "SpatRasterCollection")) stop("x must be a SpatRasterCollection")
 
   rasterList <- terra::as.list(x)
-  if(missing(colours)) {colours <- sample(colors(),length(rasterList))}
+  if(missing(colours)) {colours <- sample(grDevices::colors(),length(rasterList))}
 
   if(onlyoverlap == TRUE){
     xminAll <- max(sapply(rasterList, function(l) terra::ext(l)[1]))
@@ -294,13 +306,13 @@ plotSpatRasterCollection <- function(x, colours, onlyoverlap = TRUE) {
 
   terra::plot(rasterList[[1]],
               ext = extAll,
-              col = if(length(unique(terra::values(rasterList[[1]]))) == 2){c(adjustcolor(NA, alpha = 0), adjustcolor(colours[1], alpha = 1/length(rasterList)))}else{adjustcolor(colorRampPalette(c("white", colours[1]))(100), alpha = 1/length(rasterList))},
+              col = if(length(unique(terra::values(rasterList[[1]]))) == 2){c(grDevices::adjustcolor(NA, alpha = 0), grDevices::adjustcolor(colours[1], alpha = 1/length(rasterList)))}else{grDevices::adjustcolor(grDevices::colorRampPalette(c("white", colours[1]))(100), alpha = 1/length(rasterList))},
               legend = FALSE)
   if(length(rasterList) > 1) {
     for(l in 2:length(rasterList)){
       terra::plot(rasterList[[l]],
                   ext = extAll,
-                  col = if(length(unique(terra::values(rasterList[[l]]))) == 2){c(adjustcolor(NA, alpha = 0), adjustcolor(colours[l], alpha = 1/length(rasterList)))}else{adjustcolor(colorRampPalette(c("white", colours[l]))(100), alpha = 1/length(rasterList))},
+                  col = if(length(unique(terra::values(rasterList[[l]]))) == 2){c(grDevices::adjustcolor(NA, alpha = 0), grDevices::adjustcolor(colours[l], alpha = 1/length(rasterList)))}else{grDevices::adjustcolor(grDevices::colorRampPalette(c("white", colours[l]))(100), alpha = 1/length(rasterList))},
                   legend = FALSE,
                   add = TRUE)
     }}
