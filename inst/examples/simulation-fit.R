@@ -26,7 +26,7 @@ layer2 <- as.numeric(layer2 >= threshold)
 terra::plot(layer2, col = c(adjustcolor(NA, alpha = 0), "darkgreen"), legend = FALSE)
 
 
-img      <- terra::rast("/Users/mikaschubert/Documents/GitHub/citoMove/inst/examples/imgExample.jpg")
+img      <- terra::rast("/Users/mikaschubert/Desktop/imgExample.jpg")
 img_gray <- img[[1]] * 0.299 + img[[2]] * 0.587 + img[[3]] * 0.114
 img_gray <- terra::flip(img_gray, direction = "vertical")
 img_gray <- max(terra::values(img_gray), na.rm = TRUE) - img_gray

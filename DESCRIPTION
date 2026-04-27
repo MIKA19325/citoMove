@@ -21,7 +21,7 @@ Authors@R:
             comment = c(ORCID = "0000-0002-1771-7775"))
            )
 Description: citoMove is a wrapper for the cito R package. The 'cito' package provides a user-friendly interface for training and interpreting deep neural networks (DNN). The citoMove package extends cito with an interface to fit a conditional logit (clogit) likelihood with the purpose of fitting step selection function (ssf) models of animal movement.
-License: GPL (>= 3)
+License: GPL (>= 3) + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
@@ -31,13 +31,17 @@ Depends:
     cito (>= 1.1.1)
 Imports: 
     amt,
-    raster,
-    torch
+    torch,
+    terra,
+    tibble,
+    circular,
+    stats
 Suggests: 
     knitr,
     rmarkdown,
     testthat (>= 3.0.0),
-    terra
+    igraph,
+    ggraph
 VignetteBuilder: knitr
 LazyData: true
 BugReports: https://github.com/citoverse/citomove/issues

@@ -64,10 +64,7 @@
 #' on the same scale (i. e. \code{scaleNumericLayers} and \code{scaleImageLayers} are both TRUE).
 #'
 #'
-#' @examples
-#' \dontrun{
-#' # see system.file("examples/simulation-example.R", package = "citoMove")
-#' }
+#' @example inst/examples/simulation-example.R
 #'
 #' @export
 #' @author Mika Schubert
@@ -251,6 +248,7 @@ simulateTrack <- function(xStart = 0,
 
 # Adding timestamp:
   simData$t_ <- seq(from = tStart, by = timeStep, length.out = nrow(simData))
+  x_ = y_ = t_ = NULL
   track <- amt::make_track(simData, x_, y_, t_)
   return(track)
 }
@@ -272,10 +270,7 @@ simulateTrack <- function(xStart = 0,
 #'
 #' @return None. Only for producing plot.
 #'
-#' @examples
-#' \dontrun{
-#' # see system.file("examples/simulation-example.R", package = "citoMove")
-#' }
+#' @example inst/examples/simulation-example.R
 #'
 #' @export
 #' @author Mika Schubert
