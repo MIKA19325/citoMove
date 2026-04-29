@@ -160,12 +160,19 @@ simulateTrack <- function(xStart = 0,
     res_y <- terra::res(raster)[2]
     half  <- floor(kernelDim / 2)
 
+    border <- terra::ext(raster)
+    x_range <- border[2] - border[1]
+    y_range <- border[4] - border[3]
+
     offsets <- expand.grid(dx = seq(-half, half), dy = seq(-half, half))
     n_pts    <- length(xs)
     n_off    <- nrow(offsets)
 
     all_x <- rep(xs, each = n_off) + rep(offsets$dx, times = n_pts) * res_x
     all_y <- rep(ys, each = n_off) + rep(offsets$dy, times = n_pts) * res_y
+
+    all_x <- ((all_x - border[1]) %% x_range) + border[1]
+    all_y <- ((all_y - border[3]) %% y_range) + border[3]
 
     vals_all <- terra::extract(raster, cbind(all_x, all_y))[, 1]
 
