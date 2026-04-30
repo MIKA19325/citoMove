@@ -1,4 +1,118 @@
 
+#' Crop and Scale a Raster Layer (Internal function)
+#'
+#' Crops a \code{SpatRaster} to a given extent and optionally scales its values
+#' to a range between 0 and 1.
+#'
+#' @param layer SpatRaster. The raster layer to process.
+#' @param ext SpatExtent. The target extent to crop to.
+#' @param scale logical. If \code{TRUE}, the cropped layer is rescaled to (0, 1).
+#'   If the layer is constant (min == max), scaling is skipped.
+#'
+#' @return A \code{SpatRaster} cropped (and optionally scaled) to \code{ext}.
+#'
+#' @author Mika Schubert
+
+cropScaleRaster <- function(layer, ext, scale = TRUE) {
+  r <- terra::crop(layer, ext)
+  if (scale) {
+    r_min <- terra::global(r, "min", na.rm = TRUE)[1, 1]
+    r_max <- terra::global(r, "max", na.rm = TRUE)[1, 1]
+    if (r_max > r_min) r <- (r - r_min) / (r_max - r_min)
+  }
+  r
+}
+
+
+#' Extract Kernel Values of a Raster Layer (Internal function)
+#'
+#' For each coordinate pair in \code{xs}/\code{ys}, extracts raster values
+#' within a square neighborhood of size \code{kernelDim} × \code{kernelDim}
+#' pixels and aggregates them with \code{kernelFun}.
+#' Raster borders are toroidaly wrapped.
+#'
+#' @param raster SpatRaster. The raster from which values are extracted.
+#' @param xs numeric vector. x coordinates of query points.
+#' @param ys numeric vector. y coordinates of query points (same length as \code{xs}).
+#' @param kernelDim odd positive integer. Side length of the square kernel window.
+#' @param kernelFun function. Aggregation function applied to each kernel window
+#' (e.g. \code{mean}, \code{max})
+#'
+#' @return numeric vector of length \code{length(xs)} with one aggregated value
+#'   per query point.
+#'
+#' @author Mika Schubert
+
+extractKernelValues <- function(raster, xs, ys, kernelDim, kernelFun) {
+  res_x <- terra::res(raster)[1]
+  res_y <- terra::res(raster)[2]
+  half  <- floor(kernelDim / 2)
+
+  border  <- terra::ext(raster)
+  x_range <- border[2] - border[1]
+  y_range <- border[4] - border[3]
+
+  offsets <- expand.grid(dx = seq(-half, half),
+                         dy = seq(-half, half))
+  n_pts <- length(xs)
+  n_off <- nrow(offsets)
+
+  all_x <- rep(xs, each = n_off) +
+    rep(offsets$dx, times = n_pts) * res_x
+  all_y <- rep(ys, each = n_off) +
+    rep(offsets$dy, times = n_pts) * res_y
+
+  all_x <- ((all_x - border[1]) %% x_range) + border[1]
+  all_y <- ((all_y - border[3]) %% y_range) + border[3]
+
+  vals_all <- terra::extract(raster, cbind(all_x, all_y))[, 1]
+  vals_mat <- matrix(vals_all, nrow = n_pts,
+                     ncol = n_off, byrow = TRUE)
+
+  apply(vals_mat, 1, function(row) {
+    v <- row[!is.na(row)]
+    if (length(v) == 0) NA_real_ else kernelFun(v)
+  })
+}
+
+
+#' Compute Weighted Image-Layer Habitat Scores (Internal function)
+#'
+#' Applies \code{\link{extractKernelValues}} to each image raster and returns
+#' the beta-weighted sum of kernel scores across all image layers.
+#'
+#' @param x numeric vector. x coordinates of query points.
+#' @param y numeric vector. y coordinates of query points.
+#' @param imageRasters list of SpatRaster objects. Pre-cropped (and scaled) image
+#'   layers, one per image covariate.
+#' @param imageBetas numeric vector. Habitat preference coefficients, one per
+#'   element of \code{imageRasters}.
+#' @param imageKernelDimensions integer vector. Kernel side lengths, one per
+#'   element of \code{imageRasters}.
+#' @param imageKernelFunctions list of functions. Aggregation functions, one per
+#'   element of \code{imageRasters}.
+#'
+#' @return numeric vector of length \code{length(x)} with the weighted habitat
+#'   score contribution from all image layers
+#'
+#' @author Mika Schubert
+
+computeImageValues <- function(x, y,
+                                imageRasters,
+                                imageBetas,
+                                imageKernelDimensions,
+                                imageKernelFunctions) {
+  if (length(imageRasters) == 0) return(rep(0, length(x)))
+  Reduce("+", lapply(seq_along(imageRasters), function(k) {
+    imageBetas[[k]] * extractKernelValues(
+      imageRasters[[k]], x, y,
+      imageKernelDimensions[k],
+      imageKernelFunctions[[k]]
+    )
+  }))
+}
+
+
 #' @title Simulate Animal Tracks
 #'
 #' @description Generates a simulated animal track using the Step Selection Function (SSF)
@@ -129,74 +243,18 @@ simulateTrack <- function(xStart = 0,
   if (xStart < extAll[1] || xStart > extAll[2] || yStart < extAll[3] || yStart > extAll[4]) stop("Starting coordinates must be inside of overlaping layer extend")
   if (xminAll >= xmaxAll || yminAll >= ymaxAll) stop("The provided layers must have a spatial overlap")
 
-# Adding imageLayer if present: (cutting to size and scaling)
-  if (!is.null(imageLayers)) {
-    imageRasterList <- terra::as.list(imageLayers)
-    imageRasters <- lapply(imageRasterList, function(l) {
-      r <- terra::crop(l, extAll)
-      if (scaleImageLayers) {
-        r_min <- terra::global(r, "min", na.rm = TRUE)[1, 1]
-        r_max <- terra::global(r, "max", na.rm = TRUE)[1, 1]
-        if (r_max > r_min) r <- (r - r_min) / (r_max - r_min)}
-      r})
-  } else {imageRasters <- list()}
+# Adding image and numeric Layers if present: (cutting to size and scaling)
+  imageRasters <- if (!is.null(imageLayers)) {
+    lapply(terra::as.list(imageLayers),
+           cropScaleRaster, ext = extAll,
+           scale = scaleImageLayers)
+  } else list()
 
-
-# Adding numericLayer if present: (cutting to size and scaling)
-  if (!is.null(numericLayers)) {
-    numericRasterList <- terra::as.list(numericLayers)
-    numericRasters <- lapply(numericRasterList, function(l) {
-      r <- terra::crop(l, extAll)
-      if (scaleNumericLayers) {
-        r_min <- terra::global(r, "min", na.rm = TRUE)[1, 1]
-        r_max <- terra::global(r, "max", na.rm = TRUE)[1, 1]
-        if (r_max > r_min) r <- (r - r_min) / (r_max - r_min)}
-      r})
-  } else {numericRasters <- list()}
-
-# Kernel extraction helper function:
-  extractKernelValues_vec <- function(raster, xs, ys, kernelDim, kernelFun) {
-    res_x <- terra::res(raster)[1]
-    res_y <- terra::res(raster)[2]
-    half  <- floor(kernelDim / 2)
-
-    border <- terra::ext(raster)
-    x_range <- border[2] - border[1]
-    y_range <- border[4] - border[3]
-
-    offsets <- expand.grid(dx = seq(-half, half), dy = seq(-half, half))
-    n_pts    <- length(xs)
-    n_off    <- nrow(offsets)
-
-    all_x <- rep(xs, each = n_off) + rep(offsets$dx, times = n_pts) * res_x
-    all_y <- rep(ys, each = n_off) + rep(offsets$dy, times = n_pts) * res_y
-
-    all_x <- ((all_x - border[1]) %% x_range) + border[1]
-    all_y <- ((all_y - border[3]) %% y_range) + border[3]
-
-    vals_all <- terra::extract(raster, cbind(all_x, all_y))[, 1]
-
-    vals_mat <- matrix(vals_all, nrow = n_pts, ncol = n_off, byrow = TRUE)
-
-    apply(vals_mat, 1, function(row) {
-      v <- row[!is.na(row)]
-      if (length(v) == 0) NA_real_ else kernelFun(v)
-    })
-  }
-
-
-# Kernel value calculation helper function:
-  computeImageValues <- function(x, y) {
-    if (length(imageRasters) == 0) return(rep(0, length(x)))
-    Reduce("+", lapply(seq_along(imageRasters), function(k) {
-      imageBetas[[k]] * extractKernelValues_vec(
-        imageRasters[[k]], x, y,
-        imageKernelDimensions[k],
-        imageKernelFunctions[[k]]
-      )
-    }))
-  }
-
+  numericRasters <- if (!is.null(numericLayers)) {
+    lapply(terra::as.list(numericLayers),
+           cropScaleRaster, ext = extAll,
+           scale = scaleNumericLayers)
+  } else list()
 
 # Initializing tibble and starting point:
   simData <- tibble::tibble(stepID    = 0:nSteps,
@@ -215,7 +273,12 @@ simulateTrack <- function(xStart = 0,
   numVal_start <- sum(sapply(seq_along(numericRasters), function(k)
     betas[[k]] * terra::extract(numericRasters[[k]], cbind(simData$x_[1], simData$y_[1]))[, 1]))
 
-  imgVal_start <- computeImageValues(simData$x_[1], simData$y_[1])
+  imgVal_start <- computeImageValues(simData$x_[1],
+                                     simData$y_[1],
+                                     imageRasters,
+                                     imageBetas,
+                                     imageKernelDimensions,
+                                     imageKernelFunctions)
   simData$habitat[1] <- numVal_start + imgVal_start
 
 # Simulation loop:
@@ -234,7 +297,12 @@ simulateTrack <- function(xStart = 0,
     numLinpred <- Reduce("+", lapply(seq_along(numericRasters), function(k)
       betas[[k]] * terra::extract(numericRasters[[k]], cbind(xToro, yToro))[, 1]))
 
-    imgLinpred <- computeImageValues(xToro, yToro)
+    imgLinpred <- computeImageValues(xToro,
+                                     yToro,
+                                     imageRasters,
+                                     imageBetas,
+                                     imageKernelDimensions,
+                                     imageKernelFunctions)
     linpred    <- numLinpred + imgLinpred
 
     rawLinpred <- linpred

@@ -90,8 +90,9 @@ numLayers <- terra::sprc(layer1, layer2)
 
 
 # The image layer is transformed as a raster with the terra package:
-# For real images:
+# For this example we simulate a raster (dummyImage) as image layer:
 
+# An exemplary workflow for real images would be:
 #  img      <- terra::rast("path/to/your/image")
 #  img_gray <- img[[1]] * 0.299 + img[[2]] * 0.587 + img[[3]] * 0.114
 #  img_gray <- terra::flip(img_gray, direction = "vertical")
@@ -105,14 +106,13 @@ numLayers <- terra::sprc(layer1, layer2)
 #  imgLayers <- terra::sprc(img_gray)
 
 
-# For this example we simulate a raster as image layer:
 dummyImage <- terra::rast(
   ncols = 25,
   nrows = 25,
   ext   = terra::ext(-200, 200, -200, 200)
 )
 
-terra::values(dummyImage) <- runif(terra::ncell(dummyImage))
+terra::values(dummyImage) <- stats::runif(terra::ncell(dummyImage))
 
 terra::plot(
   dummyImage,

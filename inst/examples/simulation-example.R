@@ -84,7 +84,7 @@ dummyImage <- terra::rast(
   ext   = terra::ext(-200, 200, -200, 200)
 )
 
-terra::values(dummyImage) <- runif(terra::ncell(dummyImage))
+terra::values(dummyImage) <- stats::runif(terra::ncell(dummyImage))
 
 terra::plot(
   dummyImage,
