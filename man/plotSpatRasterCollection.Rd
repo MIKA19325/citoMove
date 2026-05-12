@@ -26,11 +26,18 @@ colour; binary layers are rendered as a single transparent colour. All layers ar
 drawn with transparency so overlapping layers remain visible.
 }
 \examples{
+
+# Example workflow for plotSpatRasterCollection() and simulateTrack()
+
+# This example shows how to:
+#   1. Create different kinds of Rasters with terra, combine them to a SpatRasterCollection
+#      and plot them with plotSpatRasterCollection()
+#   2. Generate random steps with createRandomSteps()
+
 # To simulate a track we need at least one object of class SpatRasterCollection
 # The object has to obtain one or multiple objects of class SpatRaster
 # Rasters can be analysed as numeric or raster layers (see description simulateTrack)
 # and should therefore be sorted in corresponding SpatRasterCollections
-
 
 # Example for simulating two numeric raster layers with the terra package,
 # combining them in an object of SpatRasterCollection and plotting them with the
@@ -160,12 +167,14 @@ track1 <- simulateTrack(
   scaleImageLayers     = TRUE
 )
 
+head(track1)
 
 # To visualize the track, the points and/or lines function can be used,
 # adding the track to a beforehand plotted layer or SpatRasterCollection.
 # Other tracks of the amt class track can be added to the plot in the same way.
 points(track1$x_[1], track1$y_[1], pch = 16, col = "red")
 lines(track1$x_, track1$y_, col = "red")
+
 }
 \author{
 Mika Schubert

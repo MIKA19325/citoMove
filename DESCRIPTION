@@ -35,7 +35,8 @@ Imports:
     terra,
     tibble,
     circular,
-    stats
+    stats,
+    ks
 Suggests: 
     knitr,
     rmarkdown,

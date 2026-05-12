@@ -15,6 +15,7 @@
 
 cropScaleRaster <- function(layer, ext, scale = TRUE) {
   r <- terra::crop(layer, ext)
+  terra::ext(r) <- ext
   if (scale) {
     r_min <- terra::global(r, "min", na.rm = TRUE)[1, 1]
     r_max <- terra::global(r, "max", na.rm = TRUE)[1, 1]
@@ -217,8 +218,11 @@ simulateTrack <- function(xStart = 0,
   if (!is.numeric(kappaTA) || length(kappaTA) != 1 || kappaTA < 0) stop("kappaTA must be a single non-negative number")
   if (length(rasterList) == 0) stop("at least one layer must be provided")
   if (length(rasterList) > 1) {
-    if (!all(sapply(rasterList[-1], function(l) terra::crs(l) == terra::crs(rasterList[[1]]))))
-      stop("All layers must have the same CRS")}
+    crsList  <- sapply(rasterList, terra::crs)
+    nonEmpty <- crsList[nchar(crsList) > 0]
+    if (length(nonEmpty) > 1 && length(unique(nonEmpty)) > 1)
+      stop("All layers must have the same CRS")
+  }
   if (!is.null(numericLayers)) {
     if (!inherits(numericLayers, "SpatRasterCollection")) stop("numericLayers must be of class 'SpatRasterCollection'")
     if (length(betas) != length(terra::as.list(numericLayers))) stop("betas must have one entry per numericLayer")
@@ -270,8 +274,9 @@ simulateTrack <- function(xStart = 0,
   simData$Direction[1] <- angleStart
   simData$Change[1] <- 0
 
-  numVal_start <- sum(sapply(seq_along(numericRasters), function(k)
-    betas[[k]] * terra::extract(numericRasters[[k]], cbind(simData$x_[1], simData$y_[1]))[, 1]))
+  numVal_start <- if (length(numericRasters) == 0) 0 else
+    Reduce("+", lapply(seq_along(numericRasters), function(k)
+      betas[[k]] * terra::extract(numericRasters[[k]], cbind(simData$x_[1], simData$y_[1]))[, 1]))
 
   imgVal_start <- computeImageValues(simData$x_[1],
                                      simData$y_[1],
@@ -294,8 +299,12 @@ simulateTrack <- function(xStart = 0,
     yToro     <- ((y - border[3]) %% (border[4] - border[3])) + border[3]
     Direction <- (atan2(x - simData$x_[i], y - simData$y_[i]) * 180 / pi) %% 360
 
-    numLinpred <- Reduce("+", lapply(seq_along(numericRasters), function(k)
-      betas[[k]] * terra::extract(numericRasters[[k]], cbind(xToro, yToro))[, 1]))
+    numLinpred <- if (length(numericRasters) == 0) {
+      rep(0, nChoiceSet)
+    } else {
+      Reduce("+", lapply(seq_along(numericRasters), function(k)
+        betas[[k]] * terra::extract(numericRasters[[k]], cbind(xToro, yToro))[, 1]))
+    }
 
     imgLinpred <- computeImageValues(xToro,
                                      yToro,

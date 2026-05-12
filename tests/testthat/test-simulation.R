@@ -2,11 +2,13 @@
 library(testthat)
 library(terra)
 
-# Dummyraster and dummy SpatRasterCollection
+# Dummy raster and dummy SpatRasterCollection
+
 make_raster <- function(ext = c(-10, 10, -10, 10), ncols = 10, nrows = 10) {
   r <- terra::rast(ncols = ncols, nrows = nrows, ext = terra::ext(ext))
   terra::values(r) <- seq_len(terra::ncell(r))
-  r}
+  r
+  }
 
 make_sprc <- function(...) {terra::sprc(...)}
 

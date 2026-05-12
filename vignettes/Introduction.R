@@ -1,4 +1,4 @@
-## ---- include = FALSE---------------------------------------------------------
+## ----include = FALSE----------------------------------------------------------
 knitr::opts_chunk$set(
   collapse = TRUE,
   comment = "#>"
@@ -31,8 +31,8 @@ dat_ssf <- amt::deer |>
 ## -----------------------------------------------------------------------------
 model = dnn_ssf(case_ ~ forest_dist, data = dat_ssf, epoch = 30L, plot = T, verbose = FALSE)
 
-## ---- message=F---------------------------------------------------------------
-plot(model)
+## ----eval = requireNamespace("ggraph", quietly = TRUE)------------------------
+# plot(model)
 
 ## -----------------------------------------------------------------------------
 summary(model)
