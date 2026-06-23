@@ -57,8 +57,8 @@ createRandomSteps <- function(x,
     sl_fit  <- attr(out, "sl_")
     ta_fit  <- attr(out, "ta_")
     sl_prob <- stats::dgamma(out$sl_,
-                      shape = sl_fit$params$shape,
-                      scale = sl_fit$params$scale)
+                             shape = sl_fit$params$shape,
+                             scale = sl_fit$params$scale)
     ta_prob <- as.numeric(circular::dvonmises(
       circular::circular(out$ta_),
       mu    = ta_fit$params$mu,
@@ -82,8 +82,8 @@ createRandomSteps <- function(x,
   draw_kde <- function(n, kde_obj) {
     candidates           <- ks::rkde(n * 2, fhat = kde_obj)
     keep                 <- candidates[candidates[, "sl"] > 0 &
-                                       candidates[, "ta"] >= -pi &
-                                       candidates[, "ta"] <= pi, , drop = FALSE]
+                                         candidates[, "ta"] >= -pi &
+                                         candidates[, "ta"] <= pi, , drop = FALSE]
     if (nrow(keep) < n) stop("Too many drawn samples out of range.")
     keep[seq_len(n), ]
   }
@@ -110,12 +110,12 @@ createRandomSteps <- function(x,
   random_tbl$case_    <- FALSE
   random_tbl$step_id_ <- rep(x_valid$step_id_, each = n_control)
   random_tbl$probability <- stats::predict(kde_fit,
-                                    x = cbind(sl_random, ta_random))
+                                           x = cbind(sl_random, ta_random))
   # Observed rows
   obs_tbl        <- x_valid
   obs_tbl$case_  <- TRUE
   obs_tbl$probability <- stats::predict(kde_fit,
-                                 x = cbind(x_valid$sl_, x_valid$ta_))
+                                        x = cbind(x_valid$sl_, x_valid$ta_))
 
   # Bind, sort, and select columns
   core_cols <- c("step_id_", "case_", "probability", "x1_", "x2_", "y1_", "y2_", "sl_", "ta_")
@@ -196,10 +196,10 @@ extractStepCovariates <- function(x,
                                   scaleNumericLayers    = TRUE,
                                   scaleImageLayers      = TRUE) {
 
-# Validation:
+  # Validation:
 
-  if (!inherits(x, "random_steps_prop"))
-    stop("`x` must be an object of class 'random_steps_prop'.")
+  if (!inherits(x, c("random_steps_prop","steps_covariates") ))
+    stop("`x` must be an object of class 'random_steps_prop' or 'steps_covariates'.")
   if (is.null(numericLayers) && is.null(imageLayers))
     stop("At least one of `numericLayers` or `imageLayers` must be provided.")
   if (!is.null(numericLayers)) {
@@ -293,4 +293,165 @@ extractStepCovariates <- function(x,
 
   class(x) <- c("steps_covariates", setdiff(class(x), "steps_covariates"))
   x
+}
+
+
+
+
+#' Extract Image kernels around Random Steps for CNN analysis
+#'
+#' Extracts image kernels around the coordinates of each step in a
+#' \code{random_steps_prop} object. Images must be provided as one ore
+#' multiple .tif images with the same projection as the random step
+#' coordinates. Column names are taken from the image band names.
+#'
+#' @param x An object of class \code{random_steps_prop} as returned by
+#'   \code{\link{createRandomSteps}}
+#' @param tifDirectory Directory to folder containing the .tif data
+#' @param kernelRadius Radius of the kernel around the step coordinates in meters
+#' @param imageScaling Possibility to set known scale (e.g. c(0,255) for INT1U),
+#'  if no scale provided, image data will be scaled with global min max.
+#'
+#' @return An object of class \code{steps_covariates} (and all classes inherited
+#'   from \code{x}) with one additional column per image band added.
+#'   Column names match the names of each image band.
+#'
+#' @details
+#' All image and coordinate data must share the same CRS.
+#'
+#' @seealso \code{\link{createRandomSteps}}, \code{\link{extractKernelValues}}
+#'
+#'
+#' @example inst/examples/dataprep-example.R
+#'
+#' @export
+#' @author Mika Schubert
+
+
+extractStepImagekernels <- function(x,
+                                    tifDirectory = NULL,
+                                    kernelRadius = NULL,
+                                    imageScaling = NULL) {
+
+  # Validation
+
+  if (!inherits(x, c("random_steps_prop","steps_covariates") ))
+    stop("`x` must be an object of class 'random_steps_prop' or 'steps_covariates'.")
+  if (!dir.exists(tifDirectory))
+    stop("Directory does not exist: ", tifDirectory)
+  if (is.null(kernelRadius))
+    stop("`kernelRadius` must be provided.")
+  if (!is.numeric(kernelRadius) || length(kernelRadius) != 1)
+    stop("`kernelRadius` must be a single numeric value.")
+  if (kernelRadius <= 0)
+    stop("`kernelRadius` must be a positive number.")
+  if (!is.null(imageScaling)) {
+    if (!is.numeric(imageScaling) || length(imageScaling) != 2)
+      stop("`imageScaling` must be a numeric vector of length 2, e.g. c(0, 255).")
+    if (imageScaling[1] >= imageScaling[2])
+      stop("`imageScaling[1]` must be smaller than `imageScaling[2]`.")
+  }
+
+
+  # Building virtual mosaic out of all .tif data with terra::vrt()
+
+  tif_files <- list.files(tifDirectory, pattern = "\\.tif$", full.names = TRUE)
+  if (length(tif_files) == 0) stop("No .tif files in: ", tifDirectory)
+
+  vrt_path <- tempfile(fileext = ".vrt")
+  r <- terra::vrt(tif_files, filename = vrt_path, overwrite = TRUE)
+
+  # Band names
+  folder_name <- basename(normalizePath(tifDirectory, mustWork = FALSE))
+  band_names  <- paste0(folder_name, "_band", seq_len(terra::nlyr(r)))
+  names(r)    <- band_names
+
+  # CRS check
+  if (is.na(terra::crs(r)) || terra::crs(r) == "")
+    warning("Raster has no defined CRS. Make sure coordinates and images share the same projection.")
+
+  # Coordinates as SpatVector
+  pts <- terra::vect(as.data.frame(x), geom = c("x2_", "y2_"), crs = terra::crs(r))
+
+  # --- Check which steps lie outside the raster coverage ---
+
+  mosaic_ext <- terra::ext(r)
+  xs <- x$x2_
+  ys <- x$y2_
+
+  outside <- xs < mosaic_ext[1] | xs > mosaic_ext[2] |
+    ys < mosaic_ext[3] | ys > mosaic_ext[4]
+
+  if (any(outside)) {
+    bad_steps <- which(outside)
+    warning(
+      "Step(s) ", paste(bad_steps, collapse = ", "),
+      " lie outside the raster coverage; image band values set to NA.",
+      call. = FALSE
+    )
+  }
+
+  # --- Determine band min/max for normalization ---
+
+  if (!is.null(imageScaling)) {
+    # Use user-provided fixed scaling range for all bands
+    band_min <- rep(imageScaling[1], length(band_names))
+    band_max <- rep(imageScaling[2], length(band_names))
+  } else {
+    # Compute global min/max per band from the raster mosaic
+    band_range <- terra::global(r, fun = "range", na.rm = TRUE)
+    band_min <- band_range[, "min"]
+    band_max <- band_range[, "max"]
+  }
+
+  # preparing list for image kernels
+  kernel_list <- vector("list", nrow(x))
+
+  for (i in seq_len(nrow(x))) {
+
+    # Skip steps outside raster coverage -> NA kernel
+    if (outside[i]) {
+      kernel_list[[i]] <- NULL
+      next
+    }
+
+    pt <- pts[i, ]
+
+    # setting radius
+    e <- terra::ext(
+      terra::crds(pt)[1] - kernelRadius, terra::crds(pt)[1] + kernelRadius,
+      terra::crds(pt)[2] - kernelRadius, terra::crds(pt)[2] + kernelRadius
+    )
+
+    # cropping kernels out of necessary .tifs
+    kernel <- terra::crop(r, e, snap = "near")
+
+    # additional safety check: empty or inconsistent kernel
+    if (terra::nrow(kernel) == 0 || terra::ncol(kernel) == 0 ||
+        terra::nlyr(kernel) != length(band_names)) {
+      warning("Step ", i, ": kernel could not be extracted (out of coverage); ",
+              "values set to NA.", call. = FALSE)
+      kernel_list[[i]] <- NULL
+    } else {
+      kernel_list[[i]] <- kernel
+    }
+  }
+
+  # adding kernels to data frame (with consistent normalization across all kernels)
+  for (b_idx in seq_along(band_names)) {
+    b <- band_names[b_idx]
+    b_min <- band_min[b_idx]
+    b_max <- band_max[b_idx]
+
+    x[[b]] <- lapply(kernel_list, function(k) {
+      if (is.null(k)) return(NA)
+
+      arr <- terra::as.array(k[[b]])
+      (arr - b_min) / (b_max - b_min)
+    })
+  }
+
+  class(x) <- c("steps_covariates", class(x))
+
+  return(x)
 }
