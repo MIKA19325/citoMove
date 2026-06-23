@@ -24,13 +24,13 @@ stps <- amt::steps(trk_25832)
 rand_stps <- createRandomSteps(
   x          = stps,
   estimator  = "traditional",
-  n_control  = 5)
+  n_control  = 1)
 
 # 6. Extracting image kernels (citoMove):
 rand_stps_img <- extractStepImagekernels(
   x            = rand_stps,
   tifDirectory = "/Users/mikaschubert/Desktop/Masterarbeit/disk data/Orthoimages/True_Orthophotos/10cm",
-  kernelRadius = 10,
+  kernelRadius = 20,
   imageScaling = c(0,255))
 
 
@@ -42,14 +42,14 @@ rand_stps_img <- extractStepImagekernels(
 
 # 7. Plotting amt track and image kernels:
 
-plot(trk_25832$x_, trk_25832$y_, type = "b", pch = 16)
+plot(trk_25832$x_, trk_25832$y_, type = "b", pch = 16, asp = 1)
 
-kernelRadius <- 10
+kernelRadius <- 20
 
 for (i in seq_len(nrow(rand_stps_img))) {
-  img <- rand_stps_img$`10cm_band2`[[i]][, , 1] # <- selecting band
+  img <- rand_stps_img$`10cm_band1`[[i]][, , 1] # <- selecting band
 
-  img_raster <- as.raster(img[nrow(img):1, ])
+  img_raster <- as.raster(img)
   x_center <- rand_stps_img$x2_[i]
   y_center <- rand_stps_img$y2_[i]
 
