@@ -128,6 +128,9 @@ computeImageValues <- function(x, y,
 #'   spatial overlap of all provided layers. Default: 0.
 #' @param yStart numeric. Starting y coordinate of the animal. Must lie within the
 #'   spatial overlap of all provided layers. Default: 0.
+#' @param crs object of class \code{crs} (e.g. a numeric EPSG code). CRS of the starting
+#'   coordinates \code{xStart}, \code{yStart}. Must be identical to CRS of \code{numericLayers}
+#'   and \code{imageLayers}. If \code{NULL} (default), the track is created without a CRS.
 #' @param tStart POSIXct. Starting timestamp of the track. Default: 2026-01-01 00:00:00 UTC.
 #' @param timeStep character or numeric. Time elapsed per step. Either a numeric value
 #'   (seconds) or one of: "sec", "min", "hour", "day", "week", "month", "quarter", "year".
@@ -187,6 +190,7 @@ computeImageValues <- function(x, y,
 
 simulateTrack <- function(xStart = 0,
                           yStart = 0,
+                          crs = NULL,
                           tStart = as.POSIXct("2026-01-01 00:00:00", tz = "UTC"),
                           timeStep = "hour",
                           angleStart = 0,
@@ -222,6 +226,15 @@ simulateTrack <- function(xStart = 0,
     nonEmpty <- crsList[nchar(crsList) > 0]
     if (length(nonEmpty) > 1 && length(unique(nonEmpty)) > 1)
       stop("All layers must have the same CRS")
+  }
+  if (!is.null(crs)) {
+    crs_input <- if (is.numeric(crs)) paste0("EPSG:", crs) else crs
+    crs_check <- tryCatch(terra::crs(crs_input), error = function(e) "")
+    if (nchar(crs_check) == 0) stop("crs must be NULL or a valid coordinate reference system")
+    layerCRS <- sapply(rasterList, terra::crs)
+    layerCRS <- layerCRS[nchar(layerCRS) > 0]
+    if (length(layerCRS) > 0 && !all(sapply(layerCRS, terra::same.crs, crs_input)))
+      stop("crs must match the CRS of numericLayers and imageLayers")
   }
   if (!is.null(numericLayers)) {
     if (!inherits(numericLayers, "SpatRasterCollection")) stop("numericLayers must be of class 'SpatRasterCollection'")
@@ -333,7 +346,8 @@ simulateTrack <- function(xStart = 0,
 # Adding timestamp:
   simData$t_ <- seq(from = tStart, by = timeStep, length.out = nrow(simData))
   x_ = y_ = t_ = NULL
-  track <- amt::make_track(simData, x_, y_, t_)
+
+  track <- amt::make_track(simData, x_, y_, t_, crs = if (is.null(crs)) NA else crs)
   return(track)
 }
 

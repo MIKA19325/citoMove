@@ -10,12 +10,18 @@
 
 # Step 1: Create habitat layers
 
+# Defining starting point of track as center of raster layers (e.g. EPSG:25833)
+centerX <- 820778.84
+centerY <- 5433014.65
+
 # Continuous numeric layer (e.g. elevation, NDVI):
 layer1 <- terra::rast(
   ncols = 300,
   nrows = 450,
-  ext   = terra::ext(-100, 100, -150, 150)
+  ext   = terra::ext(centerX - 100, centerX + 100,
+                     centerY - 150, centerY + 150)
 )
+terra::crs(layer1) <- "EPSG:25833"
 
 terra::values(layer1) <- stats::rnorm(terra::ncell(layer1))
 
@@ -33,8 +39,10 @@ names(layer1) <- "elevation"
 layer2 <- terra::rast(
   ncols = 300,
   nrows = 200,
-  ext   = terra::ext(-150, 150, -100, 100)
+  ext   = terra::ext(centerX - 150, centerX + 150,
+                     centerY - 100, centerY + 100)
 )
+terra::crs(layer2) <- "EPSG:25833"
 
 terra::values(layer2) <- stats::rnorm(terra::ncell(layer2))
 
@@ -60,8 +68,10 @@ numLayers <- terra::sprc(layer1, layer2)
 dummyImage <- terra::rast(
   ncols = 25,
   nrows = 25,
-  ext   = terra::ext(-200, 200, -200, 200)
+  ext   = terra::ext(centerX - 200, centerX + 200,
+                     centerY - 200, centerY + 200)
 )
+terra::crs(dummyImage) <- "EPSG:25833"
 
 terra::values(dummyImage) <- stats::runif(terra::ncell(dummyImage))
 names(dummyImage)  <- "canopy"
@@ -73,8 +83,9 @@ imgLayers <- terra::sprc(dummyImage)
 
 # Here we simulate a track using simulateTrack() for illustration.
 track <- simulateTrack(
-  xStart               = 0,
-  yStart               = 0,
+  xStart               = centerX,
+  yStart               = centerY,
+ # crs                  = "EPSG:25833",
   tStart               = as.POSIXct("2026-01-01 00:00:00", tz = "UTC"),
   timeStep             = "hour",
   angleStart           = 0,

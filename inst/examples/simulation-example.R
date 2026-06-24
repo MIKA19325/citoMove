@@ -15,12 +15,18 @@
 # combining them in an object of SpatRasterCollection and plotting them with the
 # plotSpatRasterCollection function and one SpatRasterCollection for one image layer:
 
+# Defining starting point of track as center of raster layers (e.g. EPSG:25833)
+centerX <- 820778.84
+centerY <- 5433014.65
+
 # The first numeric layer is a layer with a continuous variable:
 layer1 <- terra::rast(
   ncols = 300,
   nrows = 450,
-  ext   = terra::ext(-100, 100, -150, 150)  # defining extent and resolution of the layer
-)                                            # with resolution being number of cells per map unit
+  ext   = terra::ext(centerX - 100, centerX + 100,   # defining extent and resolution of the layer
+                     centerY - 150, centerY + 150)   # with resolution being number of cells per map unit
+)
+terra::crs(layer1) <- "EPSG:25833"
 
 terra::values(layer1) <- stats::rnorm(terra::ncell(layer1))
 
@@ -42,8 +48,10 @@ terra::plot(
 layer2 <- terra::rast(
   ncols = 300,
   nrows = 200,
-  ext   = terra::ext(-150, 150, -100, 100)
+  ext   = terra::ext(centerX - 150, centerX + 150,
+                     centerY - 100, centerY + 100)
 )
+terra::crs(layer2) <- "EPSG:25833"
 
 terra::values(layer2) <- stats::rnorm(terra::ncell(layer2))
 
@@ -88,8 +96,10 @@ numLayers <- terra::sprc(layer1, layer2)
 dummyImage <- terra::rast(
   ncols = 25,
   nrows = 25,
-  ext   = terra::ext(-200, 200, -200, 200)
+  ext   = terra::ext(centerX - 200, centerX + 200,
+                     centerY - 200, centerY + 200)
 )
+terra::crs(dummyImage) <- "EPSG:25833"
 
 terra::values(dummyImage) <- stats::runif(terra::ncell(dummyImage))
 
@@ -119,8 +129,9 @@ plotSpatRasterCollection(
 #   - betas must be a vector of preference values for each of the layers.
 #     Must be same length as number of layers.
 track1 <- simulateTrack(
-  xStart               = 0,
-  yStart               = 0,
+  xStart               = centerX,
+  yStart               = centerY,
+  crs                  = "EPSG:25833",
   tStart               = as.POSIXct("2026-01-01 00:00:00", tz = "UTC"),
   timeStep             = "hour",
   angleStart           = 0,
