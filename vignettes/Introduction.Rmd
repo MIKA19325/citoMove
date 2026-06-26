@@ -72,7 +72,7 @@ model = dnn_ssf(case_ ~ forest_dist, data = dat_ssf, epoch = 30L, plot = T, verb
 
 The plot that is produced visualizes the improvement of the model during training. The default architecture of the neural networks entails two hidden layers. We can visualize the architecture via 
 
-```{r, message=F}
+```{r, eval = requireNamespace("ggraph", quietly = TRUE)}
 plot(model)
 ```
 
