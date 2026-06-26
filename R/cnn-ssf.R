@@ -40,7 +40,7 @@ cnn_ssf <- function(X, Y, density = NULL, batchsize = 0.1, n_control, ...){
         list(nrow(pred)/strata_size, strata_size))
       )$negative()#$mean()
 
-    loss + weights$log()$negative()$reshape(list(nrow(pred)/strata_size, strata_size))
+    if(!is.null(weights)) loss = loss + weights$log()$negative()$reshape(list(nrow(pred)/strata_size, strata_size))
     loss = loss$mean()
     return(loss)
   }

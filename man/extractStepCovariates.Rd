@@ -61,6 +61,169 @@ outside a layer's extent are set to \code{NA} and a warning is issued.
 \details{
 All layers must share the same CRS.
 }
+\examples{
+
+# Example workflow for createRandomSteps() and extractStepCovariates()
+
+# This example shows how to:
+#   1. Generate habitat layers and simulate an animal track with simulateTrack()
+#      (for a more detailed example with plots see simulation-example.R)
+#   2. Generate random steps with createRandomSteps()
+#   3. Attach habitat covariate values with extractStepCovariates()
+
+
+# Step 1: Create habitat layers
+
+# Continuous numeric layer (e.g. elevation, NDVI):
+layer1 <- terra::rast(
+  ncols = 300,
+  nrows = 450,
+  ext   = terra::ext(-100, 100, -150, 150)
+)
+
+terra::values(layer1) <- stats::rnorm(terra::ncell(layer1))
+
+layer1 <- terra::focal(
+  layer1,
+  w         = terra::focalMat(layer1, 3, "Gauss"),
+  na.policy = "omit",
+  expand    = TRUE
+)
+
+names(layer1) <- "elevation"
+
+
+# Binary numeric layer (e.g. forest cover):
+layer2 <- terra::rast(
+  ncols = 300,
+  nrows = 200,
+  ext   = terra::ext(-150, 150, -100, 100)
+)
+
+terra::values(layer2) <- stats::rnorm(terra::ncell(layer2))
+
+layer2 <- terra::focal(
+  layer2,
+  w         = terra::focalMat(layer2, 15, "Gauss"),
+  na.policy = "omit",
+  expand    = TRUE
+)
+
+threshold <- stats::quantile(terra::values(layer2), 0.5, na.rm = TRUE)
+layer2    <- as.numeric(layer2 >= threshold)
+
+names(layer2) <- "forest"
+
+# Combine numeric layers into a SpatRasterCollection:
+numLayers <- terra::sprc(layer1, layer2)
+
+
+# Simulate an image layer (e.g. canopy structure derived from aerial imagery):
+
+# In reality use image data. Here we simulate a layer as above.
+dummyImage <- terra::rast(
+  ncols = 25,
+  nrows = 25,
+  ext   = terra::ext(-200, 200, -200, 200)
+)
+
+terra::values(dummyImage) <- stats::runif(terra::ncell(dummyImage))
+names(dummyImage)  <- "canopy"
+
+imgLayers <- terra::sprc(dummyImage)
+
+
+# Step 2: Simulate a track (alternativly load your own amt track of class track_xyt)
+
+# Here we simulate a track using simulateTrack() for illustration.
+track <- simulateTrack(
+  xStart               = 0,
+  yStart               = 0,
+  tStart               = as.POSIXct("2026-01-01 00:00:00", tz = "UTC"),
+  timeStep             = "hour",
+  angleStart           = 0,
+  nSteps               = 200,
+  nChoiceSet           = 100,
+  scaleSL              = 2,
+  shapeSL              = 2,
+  kappaTA              = 2,
+  numericLayers        = numLayers,
+  betas                = c(2, -1),
+  imageLayers          = imgLayers,
+  imageKernelDimensions = c(3),
+  imageKernelFunctions = list(f1 = mean),
+  imageBetas           = c(3),
+  scaleNumericLayers   = TRUE,
+  scaleImageLayers     = TRUE
+)
+
+
+
+# Step 3: Generate random steps with createRandomSteps()
+
+# createRandomSteps() accepts either a track_xyt or a steps_xyt object.
+# It internally converts tracks to steps via amt::steps().
+#
+# Two estimators are available:
+#   "density"     - fits a bivariate KDE on observed step lengths and turning
+#                   angles; recommended when the movement distribution is
+#                   complex or multimodal
+#   "traditional" - fits a gamma distribution (step length) and a von Mises
+#                   distribution (turning angle) as in the classic iSSF approach
+
+
+# Option A (default): KDE-based random steps:
+randomSteps_kde <- createRandomSteps(
+  x          = track,
+  estimator  = "density",
+  n_control  = 10         # number of random steps per observed step
+)
+
+# Option B: Traditional gamma + von Mises random steps:
+randomSteps_trad <- createRandomSteps(
+  x          = track,
+  estimator  = "traditional",
+  n_control  = 10
+)
+
+# Both outputs are of class random_steps_prop (inheriting from random_steps).
+# For each observed step (case_ = TRUE) n_control random steps (case_ = FALSE)
+# are created with the same step_id_.
+# The column 'probability' holds the steps probability according to the density
+# or gamma*von Mises distribution at each step.
+
+head(randomSteps_kde)
+
+
+
+# Step 4: Attach habitat covariates with extractStepCovariates()
+
+# extractStepCovariates() extracts covariate values at the endpoint (x2_, y2_)
+# of each step (observed and random) for numeric Layers or around the endpoint
+# for image layers.
+
+# Column names in the output are taken from terra::names() of each layer,
+# so make sure your layers are named (see Step 1 above).
+# Steps whose endpoints fall outside a layer's extent are set to NA with a
+# warning.
+#
+# scaleNumericLayers / scaleImageLayers rescale each layer to (0, 1) before
+# extraction to make beta coefficients comparable across layers.
+
+stepsWithCovariates <- extractStepCovariates(
+  x                     = randomSteps_kde,
+  numericLayers         = numLayers,
+  imageLayers           = imgLayers,
+  imageKernelDimensions = c(3),
+  imageKernelFunctions  = list(f1 = mean),
+  scaleNumericLayers    = TRUE,
+  scaleImageLayers      = TRUE
+)
+
+# The output has class steps_covariates and contains one additional column
+# per layer:
+head(stepsWithCovariates)
+}
 \seealso{
 \code{\link{createRandomSteps}}, \code{\link{extractKernelValues}}
 }

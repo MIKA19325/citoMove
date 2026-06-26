@@ -63,7 +63,7 @@ dnn_ssf <- function(formula, data, batchsize = 0.1, n_control = NULL, ...){
         list(nrow(pred)/strata_size, strata_size))
       )$negative()#$mean()
 
-    loss + weights$log()$negative()$reshape(list(nrow(pred)/strata_size, strata_size))
+    if(!is.null(weights)) loss = loss + weights$log()$negative()$reshape(list(nrow(pred)/strata_size, strata_size))
     loss = loss$mean()
     return(loss)
   }
