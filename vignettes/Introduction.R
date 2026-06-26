@@ -20,3 +20,23 @@ forest_dist <- distance(forest)
 names(forest_dist) <- "forest_dist"
 plot(forest_dist)
 
+## -----------------------------------------------------------------------------
+dat_ssf <- amt::deer |> 
+  steps_by_burst() |> 
+  random_steps() |> 
+  extract_covariates(forest_dist) |> 
+  time_of_day() |> 
+  mutate(case_ = as.integer(case_))
+
+## -----------------------------------------------------------------------------
+model = dnn_ssf(case_ ~ forest_dist, data = dat_ssf, epoch = 30L, plot = T, verbose = FALSE)
+
+## ----eval = requireNamespace("ggraph", quietly = TRUE)------------------------
+# plot(model)
+
+## -----------------------------------------------------------------------------
+summary(model)
+
+## -----------------------------------------------------------------------------
+ALE(model)
+

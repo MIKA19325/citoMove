@@ -24,7 +24,7 @@
 #' Wenzler, M., Hofer, H., Ortmann, S., & Kramer-Schadt, S. (2017).
 #' *Secrets of Success in a Landscape of Fear: Urban Wild Boar Adjust Risk
 #' Perception and Tolerate Disturbance*. *Frontiers in Ecology and Evolution*,
-#' 5:157. https://doi.org/10.3389/fevo.2017.00157. :contentReference[oaicite:3]{index=3}
+#' 5:157. https://doi.org/10.3389/fevo.2017.00157.
 #'
 #' @example inst/examples/wildboar-example.R
 "wildboar"

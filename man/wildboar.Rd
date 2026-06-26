@@ -25,7 +25,7 @@ Stillfried, M., Gras, P., Börner, K., Göritz, F., Painer, J., Röllig, K.,
 Wenzler, M., Hofer, H., Ortmann, S., & Kramer-Schadt, S. (2017).
 \emph{Secrets of Success in a Landscape of Fear: Urban Wild Boar Adjust Risk
 Perception and Tolerate Disturbance}. \emph{Frontiers in Ecology and Evolution},
-5:157. https://doi.org/10.3389/fevo.2017.00157. :contentReference[oaicite:3]{index=3}
+5:157. https://doi.org/10.3389/fevo.2017.00157.
 }
 \usage{
 wildboar
