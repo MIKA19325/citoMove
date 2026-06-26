@@ -30,6 +30,8 @@ dnn_ssf <- function(formula, data, batchsize = 0.1, n_control = NULL, ...){
   n_control = n_control + 1
   strata_size <- n_control
 
+
+
   # Validate input
   # Check for no NA in the data
   if(!all(stats::complete.cases(data[, all.vars(formula)]))) {
@@ -47,7 +49,10 @@ dnn_ssf <- function(formula, data, batchsize = 0.1, n_control = NULL, ...){
   n = batchsize * nrow(data) + n_control / 2
   batchsize = n - (n %% n_control)
 
-  custom_loss = function(pred, true) {
+  density = data$density
+  if(is.null(density)) density = matrix(1.0, nrow = nrow(data))
+
+  custom_loss = function(pred, true, weights) {
     Y = true[,1]
     P = pred[,1]
     P = P$reshape(list(nrow(pred)/strata_size, strata_size))
@@ -55,12 +60,15 @@ dnn_ssf <- function(formula, data, batchsize = 0.1, n_control = NULL, ...){
     loss = torch::distr_bernoulli(
       prob = prob)$log_prob(Y$reshape(
         list(nrow(pred)/strata_size, strata_size))
-      )$negative()$mean()
+      )$negative()#$mean()
+
+    loss + weights$log()$negative()$reshape(list(nrow(pred)/strata_size, strata_size))
+    loss = loss$mean()
     return(loss)
   }
   fit = cito::dnn(
     formula, data = data,  shuffle = FALSE,
-    loss = custom_loss, baseloss = FALSE, batchsize = batchsize, ...)
+    loss = custom_loss, baseloss = FALSE, batchsize = batchsize, weights = density, ...)
 
   class(fit) = c("dnn_ssf", class(fit))
 
