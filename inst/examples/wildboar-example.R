@@ -5,7 +5,7 @@ library(terra)
 data(wildboar)
 str(wildboar)
 
-# create a new covariate: the distance to the next forest.
+# First, we create a new raster layer with the distance to the next forest.
 
 forest <- amt::get_sh_forest()
 forest <- terra::subst(forest, 0, NA)
@@ -13,7 +13,10 @@ forest_dist <- distance(forest)
 names(forest_dist) <- "forest_dist"
 plot(forest_dist)
 
-# Load the tracking data of a red deer, create random steps, extract covariate
+# Next, we
+# 1) load the tracking data of a red deer
+# 2) create random steps
+# 3) extract covariate values for random and real steps from the raster layer
 
 data(deer)
 dat_ssf <- deer |>
@@ -23,8 +26,10 @@ dat_ssf <- deer |>
   time_of_day() |>
   mutate(case_ = as.integer(case_))
 
+# The results are provided as a data.frame / tibble
 
-# Fit a deep neural network (dnn):
+# With this, we can fit a SSD based on a deep neural network, using the
+# dnn_ssf function. For help on parameter, see ?cito::dnn
 
 model = dnn_ssf(case_ ~ forest_dist, data = dat_ssf, epoch = 10L, plot = FALSE, verbose = FALSE)
 summary(model)
