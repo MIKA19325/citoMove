@@ -1,258 +1,180 @@
 ---
-title: 'Appendix C1: Validating Random-Step Generation with Correlated Simulated Movement Data'
+title: "Appendix_C3: Validating the CNN-SSF Function with a Controlled Simulated Selection Task"
 author: "Mika Schubert"
-date: "2026-07-08"
-output: word_document
+date: "2026-07-15"
+output: pdf_document
 ---
 
 ```{r setup, include = FALSE}
-knitr::opts_chunk$set(echo = TRUE, warning = TRUE, message = FALSE)
-
+library(cito)
 library(citoMove)
-library(amt)
-library(circular)
-library(BayesianTools)
 ```
 
 ## Motivation
 
-As discussed in the methods, real world movement parameters dont necessarely follow independent parametric distributions. To adress this issue I added an own `createRandomSteps()` function to citoMove, which offers two nonparametric multidimensional options of estimating movement kernels for random (control) step generation to the `"traditional"` parametric, onedimensional gamma/von-Mises estimator option: a `"density"` estimator (bivariate kernel density estimation (KDE) with a smoothed bootstrap), and a `"density_advanced"` estimator (Random Forest + MCMC). A key requirement for these estimators is that they should preserve the **joint** structure between step length (SL) and turning angle (TA) instead of just general, one-dimensional distributions.
+The purpose of this appendix is to validate the CNN-SSF model's ability to recover a known non-parametric selection rule directly from image input.
 
-For a clean methological demonstration, I therefore simulate synthetic step data with a **known** correlation strength between SL and TA, and use it to test how well each of the three `createRandomSteps()` estimator options recover that correlation. At the same time, I deliberately use general SL and TA distributions that are more complex than traditional Gamma/von-Mises curves:
+In order to isolate the validation from any confounding, I constructed a minimal, controlled binary selection task without any further habitat covariates and without a movement kernel. At each step, the model is shown a choice set of images, mirroring the typical step-selection framework. For each choice set one image is chosen by one defined property of the images. The images show randomly rendered ellipses of varying *roundness*, defined as the proportion of the shortest axis *b* of the ellipses to the longest axis *a*. During rendering the roundest ellipse of each choice set is chosen mathematically, while the CNN-models later task is to chose the roundest ellipse graphically. A reliable recovery of the selection rule out of a graphical image feature, would consequently validate the mechanism of the function.
 
-- **SL** follows a right-skewed, two-component Gamma distribution, resulting in a "shoulder" in the curve (a majority of short steps, plus a noticeable cluster of longer steps).
-- **TA** follows a two-component von-Mises distribution: a dominant distribution concentrated around 0, plus a secondary distrivution concentrated around ±π. This mirrors backtracking behaviour found in some animal species (see wildboar example).
+## Simulating a controlled binary-choice task
 
-`"traditional"` explicitly assumes a single Gamma and a single von Mises component, so it shouldnt be able to reproduce these complex features of the curves by design; `"density"` and `"density_advanced"` are nonparametric and should, in principle, also be able to recover the complex features.
-
-## Simulating correlated movement data with complex distributions
-
-To keep this validation simple, we directly simulate a small correlated random walk , only containing the correlated SL and TA for each step:
-
-- SL is drawn from a two-component Gamma mixture (dominant short-step component + minority long-step "shoulder" component).
-- TA is drawn from a two-component von-Mises mixture: a dominant component centering around 0 (mu = 0) whose concentration increases with the SL rank, and a minor component around ±π (mu = π) whose probability decreases with the SL rank. Both mechanisms support the correlation with SL in the same direction (large steps -\> small TA; small steps -\> large TA).
-- To create processability with `createRandomSteps()`, fitting coordinates were added and, similar as would be done for real GPS data, the simulated data was then passed through `amt::make_track()` and `amt::steps()`.
+For each of `n_steps` strata, we draw `n_control + 1` candidate ellipses. Each ellipse's *roundness* (ratio of shortest to longest axis) is drawn randomly; the candidate with the highest roundness is chosen (`case_ = TRUE`), analogous to the observed step in a step-selection framework.
 
 ```{r simulate-data}
-set.seed(42)
-nSteps <- 3000
+set.seed(100)
 
-# SL: two-component Gamma distribution 
-slShareShort <- 0.65                                     # share of short steps
-component   <- stats::rbinom(nSteps, 1, prob = 1 - slShareShort) + 1L
-sl <- ifelse(component == 1,
-             stats::rgamma(nSteps, shape = 2,  scale = 15),  # short steps 
-             stats::rgamma(nSteps, shape = 20, scale = 5))   # long steps 
+nControl <- 9L          
+strataSize <- nControl + 1L
+nStepsFit <- 50L
+nStepsVal <- 50L
 
-sl_rank <- rank(sl) / nSteps
+simulateRoundnessSteps <- function(step_id, n_per_step = strataSize,
+                                    b_min = 1, b_max = 4, a = 4) {
+  b_vals    <- runif(n_per_step, min = b_min, max = b_max)
+  roundness <- b_vals / a
+  case_     <- roundness == max(roundness)
 
-# TA: two-component vonMises distribution 
-kappa_forward <- 0.2 + (15 - 0.2) * sl_rank              # concentration around ta = 0, rises with sl
-reversal_prob <- 0.4 * (1 - sl_rank)                     
-is_reversal   <- stats::rbinom(nSteps, 1, prob = reversal_prob) == 1
-ta <- numeric(nSteps)
-idx_fwd <- which(!is_reversal)
-ta[idx_fwd] <- vapply(kappa_forward[idx_fwd], function(k) {
-  as.numeric(circular::rvonmises(1, mu = circular::circular(0), kappa = k))
-}, numeric(1))
-idx_rev <- which(is_reversal)
-ta[idx_rev] <- as.numeric(
-  circular::rvonmises(length(idx_rev), mu = circular::circular(pi), kappa = 4)
-)
-ta <- ((ta + pi) %% (2 * pi)) - pi             # concentration around ta = ±pi, falls with sl     
-
-# Adding coordinates:
-heading <- cumsum(ta)
-x <- c(0, cumsum(sl * cos(heading)))
-y <- c(0, cumsum(sl * sin(heading)))
-
-track <- amt::make_track(tbl = data.frame(x = x, y = y), .x = x, .y = y, crs = NA)
-stps_sim <- amt::steps(track)
-
-# As amt::steps() cannot compute ta_ for the first step of a track (no preceding direction to measure the turn from) the first row gets dropped
-stps_sim <- stps_sim[!is.na(stps_sim$ta_), ]
-```
-
-### Showing the simulated SL distribution
-
-```{r check-sl-mixture, fig.width = 6, fig.height = 4}
-hist(stps_sim$sl_, breaks = 60, col = "grey80", border = "white",
-     main = "Simulated Step-Length Distribution",
-     xlab = "Step Length (m)")
-```
-
-### Showing the simulated TA distribution
-
-```{r check-ta-mixture, fig.width = 6, fig.height = 4}
-hist(abs(stps_sim$ta_), breaks = 60, col = "grey80", border = "white",
-     main = "Simulated |TA| Distribution",
-     xlab = "|Turning Angle| (rad)", xlim = c(0, pi))
-```
-
-## Generating random steps with all three estimator options
-
-```{r create-random-steps}
-result_traditional <- createRandomSteps(stps_sim, estimator = "traditional")
-result_density     <- createRandomSteps(stps_sim, estimator = "density")
-result_advanced <- createRandomSteps(stps_sim, estimator = "density_advanced")
-
-# Filtering random steps from actual steps for analysis
-rs_traditional <- result_traditional[!result_traditional$case_, ]
-rs_density     <- result_density[!result_density$case_, ]
-rs_advanced    <- result_advanced[!result_advanced$case_, ]
-```
-
-## Correlation: numbers and plots
-
-```{r correlation-numbers-and-plots, fig.width = 5, fig.height = 5}
-cor(stps_sim$sl_,      abs(stps_sim$ta_))
-cor(rs_traditional$sl_, abs(rs_traditional$ta_))
-cor(rs_density$sl_,     abs(rs_density$ta_))
-cor(rs_advanced$sl_,    abs(rs_advanced$ta_))
-
-# Actual correlation of random steps
-BayesianTools::correlationPlot(cbind(stps_sim$sl_, abs(stps_sim$ta_)))
-
-# Traditional (gamma x von Mises, fitted independently -> no correlation expected)
-BayesianTools::correlationPlot(cbind(rs_traditional$sl_, abs(rs_traditional$ta_)))
-
-# Density (bivariate KDE + smoothed bootstrap):
-BayesianTools::correlationPlot(cbind(rs_density$sl_, abs(rs_density$ta_)))
-
-# Density advanced (Random Forest + MCMC):
-BayesianTools::correlationPlot(cbind(rs_advanced$sl_, abs(rs_advanced$ta_)))
-```
-
-## General distribution recovery
-
-### Step length
-
-```{r sl-density-comparison, fig.width = 6, fig.height = 5}
-sl_upper  <- quantile(stps_sim$sl_, 0.99)
-bw_common <- bw.nrd0(stps_sim$sl_[stps_sim$sl_ > 0])
-
-dens_obs         <- density(stps_sim$sl_, bw = bw_common)
-dens_traditional <- density(rs_traditional$sl_, bw = bw_common)
-dens_density     <- density(rs_density$sl_, bw = bw_common)
-dens_advanced    <- density(rs_advanced$sl_, bw = bw_common)
-
-in_range <- function(d) d$y[d$x >= 0 & d$x <= sl_upper]
-ylim_all <- range(c(in_range(dens_obs), in_range(dens_traditional),
-                    in_range(dens_density), in_range(dens_advanced)))
-
-plot(dens_obs, col = "black", lwd = 2,
-     xlab = "Step Length (m)", ylab = "Density",
-     main = "Step-Length Distribution (simulated data)",
-     xlim = c(0, sl_upper), ylim = ylim_all)
-lines(dens_traditional, col = "blue",      lwd = 2)
-lines(dens_density,     col = "darkgreen", lwd = 2)
-lines(dens_advanced,    col = "red",       lwd = 2)
-legend("topright",
-       legend = c("observation", "traditional", "density (KDE)", "density_advanced (RF)"),
-       col    = c("black", "blue", "darkgreen", "red"),
-       lwd    = 2)
-```
-
-### Turning angle
-
-```{r ta-density-comparison, fig.width = 6, fig.height = 5}
-bw_common_ta <- bw.nrd0(abs(stps_sim$ta_))
-
-dens_obs_ta         <- density(abs(stps_sim$ta_), bw = bw_common_ta)
-dens_traditional_ta <- density(abs(rs_traditional$ta_), bw = bw_common_ta)
-dens_density_ta     <- density(abs(rs_density$ta_), bw = bw_common_ta)
-dens_advanced_ta    <- density(abs(rs_advanced$ta_), bw = bw_common_ta)
-
-in_range_ta <- function(d) d$y[d$x >= 0 & d$x <= pi]
-ylim_all_ta <- range(c(in_range_ta(dens_obs_ta), in_range_ta(dens_traditional_ta),
-                       in_range_ta(dens_density_ta), in_range_ta(dens_advanced_ta)))
-
-plot(dens_obs_ta, col = "black", lwd = 2,
-     xlab = "Turning Angle (|rad|)", ylab = "Density",
-     main = "Turning-Angle Distribution (simulated data)",
-     xlim = c(0, pi), ylim = ylim_all_ta)
-lines(dens_traditional_ta, col = "blue",      lwd = 2)
-lines(dens_density_ta,     col = "darkgreen", lwd = 2)
-lines(dens_advanced_ta,    col = "red",       lwd = 2)
-legend("topright",
-       legend = c("observation", "traditional", "density (KDE)", "density_advanced (RF)"),
-       col    = c("black", "blue", "darkgreen", "red"),
-       lwd    = 2)
-```
-
-## Correlation trend comparison
-
-To compare the correlation plots directly, I fit a regression of `|ta_|` on `sl_` for each dataset and overlay all trend lines in a single plot.
-
-```{r correlation-trend-comparison, fig.width = 6, fig.height = 5}
-sl_grid <- seq(0, sl_upper, length.out = 200)
-
-fit_trend <- function(sl, ta_abs) {
-  lw <- stats::lowess(sl, ta_abs, f = 2/3)
-  stats::approx(lw$x, lw$y, xout = sl_grid, rule = 2)$y
+  data.frame(step_id_ = step_id, case_ = case_,
+             b_vals = b_vals, roundness = roundness)
 }
 
-trend_obs         <- fit_trend(stps_sim$sl_, abs(stps_sim$ta_))
-trend_traditional <- fit_trend(rs_traditional$sl_, abs(rs_traditional$ta_))
-trend_density     <- fit_trend(rs_density$sl_, abs(rs_density$ta_))
-trend_advanced    <- fit_trend(rs_advanced$sl_, abs(rs_advanced$ta_))
-
-ylim_trend <- range(c(trend_obs, trend_traditional, trend_density, trend_advanced),
-                    na.rm = TRUE)
-
-plot(sl_grid, trend_obs, type = "l", col = "black", lwd = 2,
-     xlab = "Step Length (m)", ylab = "Local mean |Turning Angle| (rad)",
-     main = "SL-TA Correlation Trend by Estimator",
-     ylim = ylim_trend)
-lines(sl_grid, trend_traditional, col = "blue",      lwd = 2)
-lines(sl_grid, trend_density,     col = "darkgreen", lwd = 2)
-lines(sl_grid, trend_advanced,    col = "red",        lwd = 2)
-legend("right",
-       legend = c("observation", "traditional", "density (KDE)", "density_advanced (RF)"),
-       col    = c("black", "blue", "darkgreen", "red"),
-       lwd    = 2)
+fit_data <- do.call(rbind, lapply(seq_len(nStepsFit), simulateRoundnessSteps))
+val_data <- do.call(rbind, lapply(seq_len(nStepsVal), simulateRoundnessSteps))
 ```
 
-## Excurs: Modifying the `"density_advanced"` estimator with `sl_transform`
+## Converting ellipses to image arrays
 
-`sl_transform` controls how the SL axis is binned before fitting the RF of the `"density_advanced"` estimator. `"log1p"` uses equal-width bins in `log1p(sl)`-space (fine resolution near 0, progressively coarser for large sl); `"none"` uses equal-width bins in the original sl scale. This results in a trade-off between better guessing small SL or big SL peaks in the distribution. Since our SL shoulder sits in the range where `"log1p"` binning gets coarser, this comparison is able to show this resolution trade-off in practice.
+Each ellipse is rendered as a binary image array with a randomly rotated major axis, so the model is forced to learn the shape (roundness) without an influence of the position.
 
-```{r sl-transform-comparison, fig.width = 6, fig.height = 5}
-result_advanced_log1p <- createRandomSteps(stps_sim, estimator = "density_advanced",
-                                           sl_transform = "log1p")
-result_advanced_none  <- createRandomSteps(stps_sim, estimator = "density_advanced",
-                                           sl_transform = "none")
+```{r ellipse-image-function}
+imgSize <- 500   # resolution in pixels
+aFixed  <- 230   # radius (half of major axis length) in pixels
 
-rs_advanced_log1p <- result_advanced_log1p[!result_advanced_log1p$case_, ]
-rs_advanced_none  <- result_advanced_none[!result_advanced_none$case_, ]
+makeEllipseImage <- function(roundness, theta, size = imgSize, a = aFixed) {
+  b <- a * roundness
 
-dens_advanced_log1p <- density(rs_advanced_log1p$sl_, bw = bw_common)
-dens_advanced_none  <- density(rs_advanced_none$sl_,  bw = bw_common)
+  coords <- seq_len(size) - (size + 1) / 2
+  grid   <- expand.grid(x = coords, y = coords)
 
-in_range2 <- function(d) d$y[d$x >= 0 & d$x <= sl_upper]
-ylim_all2 <- range(c(in_range(dens_obs), in_range2(dens_advanced_log1p),
-                     in_range2(dens_advanced_none)))
+  x_rot <-  cos(theta) * grid$x + sin(theta) * grid$y
+  y_rot <- -sin(theta) * grid$x + cos(theta) * grid$y
 
-plot(dens_obs, col = "black", lwd = 2,
-     xlab = "Step Length (m)", ylab = "Density",
-     main = "sl_transform: log1p vs. none (density_advanced only)",
-     xlim = c(0, sl_upper), ylim = ylim_all2)
-lines(dens_advanced_log1p, col = "red",    lwd = 2)
-lines(dens_advanced_none,  col = "orange", lwd = 2)
-legend("topright",
-       legend = c("observation", "density_advanced (log1p)", "density_advanced (none)"),
-       col    = c("black", "red", "orange"),
-       lwd    = 2)
+  inside <- (x_rot / a)^2 + (y_rot / b)^2 <= 1
+  matrix(as.numeric(inside), nrow = size, ncol = size)
+}
+
+buildImageArray <- function(data, size = imgSize, seed = NULL) {
+  if (!is.null(seed)) set.seed(seed)
+  n      <- nrow(data)
+  thetas <- runif(n, min = 0, max = pi)   # ellipse symmetry: pi is sufficient
+  X <- array(NA_real_, dim = c(n, 1, size, size))
+  for (i in seq_len(n)) {
+    X[i, 1, , ] <- makeEllipseImage(roundness = data$roundness[i], theta = thetas[i])
+  }
+  X
+}
+
+X     <- buildImageArray(fit_data, seed = 1)
+X_val <- buildImageArray(val_data, seed = 2)
+```
+
+### Visual check
+
+```{r plot-example-images, fig.width = 8, fig.height = 3.5}
+exampleRows <- which(fit_data$step_id_ == fit_data$step_id_[1])
+
+par(mfrow = c(2, 5), mar = c(1, 1, 2, 1))
+for (i in exampleRows) {
+  image(X[i, 1, , ], col = grey.colors(2), axes = FALSE,
+        main = paste0("case_=", fit_data$case_[i],
+                       "\nround=", round(fit_data$roundness[i], 2)))
+}
+par(mfrow = c(1, 1))
+```
+
+## Fitting the CNN-SSF model
+
+```{r fit-model}
+Y <- as.numeric(fit_data$case_)
+
+architecture <- create_architecture(conv(n_kernels = 1L, kernel_size = c(10, 10)),
+                                     linear(20, activation = "relu"))
+
+m <- cnn_ssf(X = X, Y = Y, density = rep(1, nrow(fit_data)),
+             n_control = nControl, architecture = architecture,
+             lr = 0.1, epochs = 25)
+```
+
+## Validation on independent data
+
+```{r validate}
+Y_val <- as.numeric(val_data$case_)
+
+evaluateAccuracy <- function(model, X_new, data_new) {
+  pred_raw <- as.vector(predict(model, newdata = X_new))
+
+  df <- data.frame(step_id_ = data_new$step_id_, pred = pred_raw,
+                    case_ = data_new$case_)
+
+  softmax <- function(x) exp(x) / sum(exp(x))
+  df$prob <- ave(df$pred, df$step_id_, FUN = softmax)
+
+  perStepHit <- tapply(seq_len(nrow(df)), df$step_id_, function(idx) {
+    which.max(df$prob[idx]) == which(df$case_[idx])
+  })
+
+  list(accuracy = mean(perStepHit), df = df)
+}
+
+result <- evaluateAccuracy(m, X_val, val_data)
+result$accuracy
+```
+
+## Testing model robustness by repeating validation draws
+
+To get an estimate of the model's true recovery rate, I repeat the validation several times on multiple sets of simulated data and analyzing the distribution of accuracies.
+
+```{r repeated-validation}
+runValidation <- function(seed) {
+  set.seed(seed)
+  val_i   <- do.call(rbind, lapply(seq_len(nStepsVal), simulateRoundnessSteps))
+  X_val_i <- buildImageArray(val_i, seed = seed + 1000)
+  evaluateAccuracy(m, X_val_i, val_i)$accuracy
+}
+
+accs <- sapply(101:110, runValidation)   # 10 different validation data sets
+c(mean = mean(accs), sd = sd(accs), min = min(accs), max = max(accs))
+```
+
+## Accuracy as a function of task difficulty
+
+
+In order to test if the remaining error rate is the result of an error in the models or is explainable with the task setup, I checked for one possible task depending explanation. As the visual difference between candidates in choice sets in which the most round candidates are very close can be minimal or, depending on the resolution of the image, even nonexistent, the choice can result in a draw, in which case the model chooses one candidate randomly. To check for this, I test if the model's errors concentrate at these close cases by plotting the differences between the roundness of the two closest candidates of each choice set and analyzing the distribution of the incorrectly chosen instances. A concentration of errors at very close roundness differences hints strongly at this explanation.
+
+```{r difficulty-analysis, fig.width = 6, fig.height = 5}
+df <- result$df
+df$roundness <- val_data$roundness
+
+margin <- tapply(df$roundness, df$step_id_, function(r) {
+  sr <- sort(r, decreasing = TRUE)
+  sr[1] - sr[2]              # gap between best and second-best candidate
+})
+
+hit <- tapply(seq_len(nrow(df)), df$step_id_, function(idx) {
+  which.max(df$prob[idx]) == which(df$case_[idx])
+})
+
+plot(margin, as.numeric(hit), pch = 16, col = "grey40",
+     xlab = "Roundness margin (best - second-best)", ylab = "Correctly identified (0/1)",
+     main = "Prediction accuracy vs. task difficulty")
+lo <- lowess(margin, as.numeric(hit))
+
 ```
 
 ## Discussion
 
-**Correlation recovery.** The actual correlation between SL and \|TA\| in the simulated data was r ≈ -0.38. `"traditional"` reproduced essentially no correlation (consistent with fitting SL and TA as independent distributions by construction), while both `"density"` (r ≈ -0.39) and `"density_advanced"` (r ≈ -0.38) recovered the true correlation almost exactly. The correlation-trend plot confirms this in more detail: the `"traditional"` trend line is flat across the entire SL range (no dependency of \|TA\| on SL at all), whereas both `"density"` and `"density_advanced"` closely track the true declining trend. `"density_advanced"` follows the observed trend essentially everywhere, while `"density"` slightly underestimates the local mean \|TA\| at the very smallest step lengths before converging to the true trend for medium and large steps.
+**Recovery accuracy.** The CNN-SSF function was able to correctly identify the roundest candidate in averagely 90% of choice sets, with a standard deviation of only 5% between 10 different validation data sets. This result far exceeds the 10% baseline expected if randomly guessed, while the low standard deviation indicates a stable recovery rate.
 
-**SL distribution recovery.** `"traditional"`, constrained to a single Gamma, produces a smooth curve that fundamentally cannot represent the shoulder around 100 m: it overestimates density in the trough between the two components (roughly 50-75 m) and underestimates both modes. `"density"` and `"density_advanced"` both closely reproduce the true complex shape, including the shoulder, essentially overlapping with the observed curve.
+**Error structure.** All instances of model error in choosing the roundest candidate occurred at tiny roundness margins below approximately 3%, while all choices in choice sets with larger roundness margins between the top candidates were chosen correctly. This concentration of the models errors on nearly tied candidates hints at the expectable explanation of the model struggling to discriminate ellipses whose axis ratios differ only marginally. This suggests the origin of the remaining error to lie in the task setup rather than a systematical failure of the model to extract graphical features.
 
-**TA distribution recovery.** The TA distribution shows the same pattern: `"traditional"`'s single von-Mises component produces a peak near 0 that is both too low and too wide, and it completely fails to reproduce the secondary peak near ±π. `"density"` and `"density_advanced"` both reproduce the sharp peak near 0 and the secondary peak near ±π closely.
-
-**`sl_transform`: log1p vs. none.** The predicted resolution trade-off (finer bins near 0 but coarser bins in the shoulder region under `"log1p"`) is visible, but modest rather than dramatic for this shoulder location and strength: `"log1p"` tracks the true primary peak height slightly more closely, while the two options perform similarly in the shoulder region itself. This suggests that, at least for a shoulder positioned at roughly half of the effective SL range (as here), the choice of `sl_transform` is not a major driver of estimation quality - though this may change for a shoulder positioned further into the tail, or with sparser data.
-
-**Overall.** Both nonparametric estimators (`"density"` and `"density_advanced"`) clearly outperform `"traditional"` on every criterion tested here (correlation, SL shape, and TA shape) as expected given that the simulated data was deliberately constructed to challenge `"traditional"`'s assumptions. `"density_advanced"` matches or slightly exceeds `"density"` on correlation recovery, while both perform comparably on the general distributions.
+**Interpretation.** After deliberately isolating the selection choice depending on a single controlled graphical feature, the CNN-SSF function creates a model which is able to reliably recover the graphical choice criteria correctly. This demonstrates that graphical features influencing the conditional logit choice are correctly propagated through the convolutional layers, even with a efficient basic architecture, validating the general functionality of the functions approach. To test the approaches usability on real world data, a case study will later be conducted (see Appendix B).
