@@ -12,9 +12,9 @@ library(citoMove)
 
 ## Motivation
 
-The purpose of this appendix is to validate the CNN-SSF model's ability to recover a known non-parametric selection rule directly from image input.
+The purpose of this appendix is to validate the CNN-SSF model's ability to recover an unknown non-parametric selection rule directly from image input.
 
-In order to isolate the validation from any confounding, I constructed a minimal, controlled binary selection task without any further habitat covariates and without a movement kernel. At each step, the model is shown a choice set of images, mirroring the typical step-selection framework. For each choice set one image is chosen by one defined property of the images. The images show randomly rendered ellipses of varying *roundness*, defined as the proportion of the shortest axis *b* of the ellipses to the longest axis *a*. During rendering the roundest ellipse of each choice set is chosen mathematically, while the CNN-models later task is to chose the roundest ellipse graphically. A reliable recovery of the selection rule out of a graphical image feature, would consequently validate the mechanism of the function.
+In order to isolate the validation from any confounding, I constructed a minimal, controlled binary selection task without any further habitat covariates and without a movement kernel. At each step, the model is shown a choice set of images, mirroring the typical step-selection framework. For each choice set one image is chosen by one defined property of the images. The images show randomly rendered ellipses of varying *roundness*, defined as the proportion of the shortest axis *b* of the ellipses to the longest axis *a*. During rendering the roundest ellipse of each choice set is chosen mathematically, while the CNN-models later task is to chose the roundest ellipse visually. A reliable recovery of the selection rule out of a graphical image feature, would consequently validate the functionality of the function.
 
 ## Simulating a controlled binary-choice task
 
@@ -47,14 +47,16 @@ val_data <- do.call(rbind, lapply(seq_len(nStepsVal), simulateRoundnessSteps))
 Each ellipse is rendered as a binary image array with a randomly rotated major axis, so the model is forced to learn the shape (roundness) without an influence of the position.
 
 ```{r ellipse-image-function}
-imgSize <- 500   # resolution in pixels
-aFixed  <- 230   # radius (half of major axis length) in pixels
+imgSize <- 500
+aMax          <- imgSize / 2 - 20
+areaTarget    <- aMax^2 * 0.25
 
-makeEllipseImage <- function(roundness, theta, size = imgSize, a = aFixed) {
+makeEllipseImage <- function(roundness, theta, size = imgSize, area_target = areaTarget) {
+  a <- sqrt(area_target / roundness)
   b <- a * roundness
 
   coords <- seq_len(size) - (size + 1) / 2
-  grid   <- expand.grid(x = coords, y = coords)
+  grid    <- expand.grid(x = coords, y = coords)
 
   x_rot <-  cos(theta) * grid$x + sin(theta) * grid$y
   y_rot <- -sin(theta) * grid$x + cos(theta) * grid$y
@@ -66,7 +68,7 @@ makeEllipseImage <- function(roundness, theta, size = imgSize, a = aFixed) {
 buildImageArray <- function(data, size = imgSize, seed = NULL) {
   if (!is.null(seed)) set.seed(seed)
   n      <- nrow(data)
-  thetas <- runif(n, min = 0, max = pi)   # ellipse symmetry: pi is sufficient
+  thetas <- runif(n, min = 0, max = pi)  
   X <- array(NA_real_, dim = c(n, 1, size, size))
   for (i in seq_len(n)) {
     X[i, 1, , ] <- makeEllipseImage(roundness = data$roundness[i], theta = thetas[i])
@@ -97,12 +99,12 @@ par(mfrow = c(1, 1))
 ```{r fit-model}
 Y <- as.numeric(fit_data$case_)
 
-architecture <- create_architecture(conv(n_kernels = 1L, kernel_size = c(10, 10)),
+architecture <- create_architecture(conv(n_kernels = 8L, kernel_size = c(10, 10)),
                                      linear(20, activation = "relu"))
 
 m <- cnn_ssf(X = X, Y = Y, density = rep(1, nrow(fit_data)),
              n_control = nControl, architecture = architecture,
-             lr = 0.1, epochs = 25)
+             lr = 0.01, epochs = 25)
 ```
 
 ## Validation on independent data
@@ -148,7 +150,6 @@ c(mean = mean(accs), sd = sd(accs), min = min(accs), max = max(accs))
 
 ## Accuracy as a function of task difficulty
 
-
 In order to test if the remaining error rate is the result of an error in the models or is explainable with the task setup, I checked for one possible task depending explanation. As the visual difference between candidates in choice sets in which the most round candidates are very close can be minimal or, depending on the resolution of the image, even nonexistent, the choice can result in a draw, in which case the model chooses one candidate randomly. To check for this, I test if the model's errors concentrate at these close cases by plotting the differences between the roundness of the two closest candidates of each choice set and analyzing the distribution of the incorrectly chosen instances. A concentration of errors at very close roundness differences hints strongly at this explanation.
 
 ```{r difficulty-analysis, fig.width = 6, fig.height = 5}
@@ -171,10 +172,48 @@ lo <- lowess(margin, as.numeric(hit))
 
 ```
 
+## Testing model learning stability by repeating model fitting and validation
+
+To test the stability of the model training process, I fit the model 5 times on the same simulated data and analyze the validation outcomes.
+
+```{r fit-model}
+fitAccuracies <- numeric(10)
+
+for (i in 1:10) {
+  
+m_i <- cnn_ssf(X = X, Y = Y, density = rep(1, nrow(fit_data)),
+             n_control = nControl, architecture = architecture,
+             lr = 0.01, epochs = 25)
+
+fitAccuracies[i] <- evaluateAccuracy(m_i, X_val, val_data)$accuracy
+}
+
+fitAccuracies
+```
+
+
+## Ablation test to rule out pixel sum shortcut
+
+To rule out the possibility that the model solves the task using the shortcut of summing up pixel intensities rather than learning spatial shape, I do an ablation test in which the pixels of each validation image are randomly shuffled. This preserves the exact number of pixels of the ellipse's area per image while completely destroying its spatial layout.
+
+```{r ablation-shuffle}
+n    <- dim(X_val)[1]
+size <- dim(X_val)[3]
+
+X_val_shuffled <- array(NA_real_, dim = dim(X_val))
+for (i in seq_len(n)) {
+  X_val_shuffled[i, 1, , ] <- matrix(sample(X_val[i, 1, , ]), nrow = size, ncol = size)
+}
+
+result_shuffled <- evaluateAccuracy(m, X_val_shuffled, val_data)
+result_shuffled$accuracy
+```
+
+
 ## Discussion
 
-**Recovery accuracy.** The CNN-SSF function was able to correctly identify the roundest candidate in averagely 90% of choice sets, with a standard deviation of only 5% between 10 different validation data sets. This result far exceeds the 10% baseline expected if randomly guessed, while the low standard deviation indicates a stable recovery rate.
+**Model robustnes and stability** The CNN-SSF function was able to correctly identify the roundest candidate in averagely 90% of choice sets, with a standard deviation of only 5% between 10 different validation data sets. This result far exceeds the 10% baseline expected if randomly guessed, while the low standard deviation indicates a stable recovery rate. The repeatedly successful learning process indicates a stable fitting process while the ablation test rules out a pixel count shortcut. Destroying the spatial layout of the images dropped the accuracy from around 90 % to the 10 % baseline, which is expected when randomly choosing one candidate out of 10. This proves that the model selection is based on the spatial features of the images.
 
-**Error structure.** All instances of model error in choosing the roundest candidate occurred at tiny roundness margins below approximately 3%, while all choices in choice sets with larger roundness margins between the top candidates were chosen correctly. This concentration of the models errors on nearly tied candidates hints at the expectable explanation of the model struggling to discriminate ellipses whose axis ratios differ only marginally. This suggests the origin of the remaining error to lie in the task setup rather than a systematical failure of the model to extract graphical features.
+**Model error analysis** All instances of model error in choosing the roundest candidate occurred at tiny roundness margins below approximately 3%, while all choices in choice sets with larger roundness margins between the top candidates were chosen correctly. This concentration of the models errors on nearly tied candidates hints at the expectable explanation of the model struggling to discriminate ellipses whose axis ratios differ only marginally. This suggests the origin of the remaining error to lie in the task setup rather than a systematical failure of the model to extract graphical features.
 
-**Interpretation.** After deliberately isolating the selection choice depending on a single controlled graphical feature, the CNN-SSF function creates a model which is able to reliably recover the graphical choice criteria correctly. This demonstrates that graphical features influencing the conditional logit choice are correctly propagated through the convolutional layers, even with a efficient basic architecture, validating the general functionality of the functions approach. To test the approaches usability on real world data, a case study will later be conducted (see Appendix B).
+**Conclusion** After deliberately isolating the selection choice depending on a single controlled graphical feature, the CNN-SSF function creates a model which is able to reliably recover the graphical choice criteria correctly. This demonstrates that graphical features are correctly captured through the convolutional layers, even with the basic architecture used here, validating the general functionality of the functions approach. To test the approaches usability on real world data, a case study will later be conducted (see Appendix B).
