@@ -47,8 +47,8 @@ val_data <- do.call(rbind, lapply(seq_len(nStepsVal), simulateRoundnessSteps))
 Each ellipse is rendered as a binary image array with a randomly rotated major axis, so the model is forced to learn the shape (roundness) without an influence of the position.
 
 ```{r ellipse-image-function}
-imgSize <- 500
-aMax          <- imgSize / 2 - 20
+imgSize <- 250
+aMax          <- imgSize / 2 - 10
 areaTarget    <- aMax^2 * 0.25
 
 makeEllipseImage <- function(roundness, theta, size = imgSize, area_target = areaTarget) {
@@ -96,10 +96,12 @@ par(mfrow = c(1, 1))
 
 ## Fitting the CNN-SSF model
 
+The model's architecture is deliberately kept simple with only one convolutional layer to show its ability to efficiently pick up elementary patterns. The architecture's complexity can consequently be scaled up with the complexity of the task. When setting up the architecture I had to adress one further problem specific to the 'relu' activation function: 
+
 ```{r fit-model}
 Y <- as.numeric(fit_data$case_)
 
-architecture <- create_architecture(conv(n_kernels = 8L, kernel_size = c(10, 10)),
+architecture <- create_architecture(conv(n_kernels = 8L, kernel_size = c(3, 3)),
                                      linear(20, activation = "relu"))
 
 m <- cnn_ssf(X = X, Y = Y, density = rep(1, nrow(fit_data)),

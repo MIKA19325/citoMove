@@ -1,0 +1,180 @@
+---
+title: 'Appendix C2: Traditional vs. Weighted Likelihood for Non-Uniform Random Steps'
+author: "Mika Schubert"
+date: "2026-07-29"
+output: pdf_document
+---
+
+```{r setup, include = FALSE}
+library(citoMove)
+library(amt)
+library(circular)
+```
+
+## Motivation
+
+Every SSF likelihood has to correct for the fact that random ("control") steps are not drawn uniformly, but from a movement-kernel distribution (see main text, eq. 1). In traditional SSF-setups like the R-package 'amt' this correction is performed *implicitly*, by fitting a Gamma distribution to step length and a von Mises distribution to turning angle, and using their densities directly as the correction term (e.g. in the function `amt::random_steps()`) . This works well as long as the true movement kernel really resembles a Gamma/von Mises distribution, which consequently results in a big limitation as real movement kernels are usually more complex ( see Appendix C1).
+
+This appendix tests directly what that means for the likelihood: I simulate two movement kernels: a **simple** one (single Gamma/von Mises, matching traditional SSF's assumption) and a **complex** one (the bimodal kernel from Appendix C1) and check whether the `probability` value `createRandomSteps()` assigns to each step actually matches the *true* density it was drawn from. I do this once with `estimator = "traditional"` (the traditional `amt`-based likelihood), and once with `estimator = "density"` (the new, weighted-likelihood approach).
+
+## Simulating two movement kernels
+
+Simulating and visualizing a simple (gamma/von Mises) and a complex movement Kernel.
+
+```{r simulate-kernels}
+set.seed(42)
+nSteps <- 3000
+
+simulateTrack <- function(rsl, rta) {
+  sl <- rsl(nSteps)
+  ta <- rta(nSteps)
+  heading <- cumsum(ta)
+  x <- c(0, cumsum(sl * cos(heading)))
+  y <- c(0, cumsum(sl * sin(heading)))
+  track <- amt::make_track(tbl = data.frame(x = x, y = y), .x = x, .y = y, crs = NA)
+  stps <- amt::steps(track)
+  stps[!is.na(stps$ta_), ]
+}
+
+# --- Simple kernel: single Gamma step length, single von Mises turning angle ---
+rslSimple <- function(n) stats::rgamma(n, shape = 6, scale = 12)
+rtaSimple <- function(n) as.numeric(circular::rvonmises(n, mu = circular::circular(0), kappa = 2))
+stpsSimple <- simulateTrack(rslSimple, rtaSimple)
+
+# --- Complex kernel: exactly the bimodal kernel from Appendix C1 (without the
+# step-length-dependent SL-TA coupling, so the true density stays closed-form
+# for this comparison - the correlated case was already covered in Appendix C1) ---
+slShareShort <- 0.65
+rslComplex <- function(n) {
+  component <- stats::rbinom(n, 1, prob = 1 - slShareShort) + 1L
+  ifelse(component == 1,
+         stats::rgamma(n, shape = 2,  scale = 15),   # short steps
+         stats::rgamma(n, shape = 20, scale = 5))    # long steps
+}
+reversalProb <- 0.3
+rtaComplex <- function(n) {
+  isReversal <- stats::rbinom(n, 1, prob = reversalProb) == 1
+  ta <- numeric(n)
+  ta[!isReversal] <- as.numeric(circular::rvonmises(sum(!isReversal), mu = circular::circular(0),  kappa = 5))
+  ta[isReversal]  <- as.numeric(circular::rvonmises(sum(isReversal),  mu = circular::circular(pi), kappa = 4))
+  ((ta + pi) %% (2 * pi)) - pi
+}
+stpsComplex <- simulateTrack(rslComplex, rtaComplex)
+```
+
+```{r true-densities}
+# True joint densities (SL x TA, independent by construction) - needed below
+# to check how accurate each estimator's `probability` column really is.
+trueDensitySimple <- function(sl, ta) {
+  stats::dgamma(sl, shape = 6, scale = 12) *
+    as.numeric(circular::dvonmises(circular::circular(ta), mu = circular::circular(0), kappa = 2))
+}
+
+trueDensityComplex <- function(sl, ta) {
+  dSl <- slShareShort       * stats::dgamma(sl, shape = 2,  scale = 15) +
+         (1 - slShareShort) * stats::dgamma(sl, shape = 20, scale = 5)
+  dTa <- (1 - reversalProb) * as.numeric(circular::dvonmises(circular::circular(ta), mu = circular::circular(0),  kappa = 5)) +
+         reversalProb       * as.numeric(circular::dvonmises(circular::circular(ta), mu = circular::circular(pi), kappa = 4))
+  dSl * dTa
+}
+```
+
+```{r plotting-distributions}
+par(mfrow = c(1, 2))
+
+# Step length: true marginal SL densities 
+slGrid <- seq(0, quantile(c(stpsSimple$sl_, stpsComplex$sl_), 0.99), length.out = 500)
+
+trueSlSimple  <- dgamma(slGrid, shape = 6, scale = 12)
+trueSlComplex <- slShareShort       * dgamma(slGrid, shape = 2,  scale = 15) +
+                 (1 - slShareShort) * dgamma(slGrid, shape = 20, scale = 5)
+
+ylimSl <- range(c(trueSlSimple, trueSlComplex)) * c(1, 1.15)
+
+plot(slGrid, trueSlSimple, type = "l", col = "blue", lwd = 2,
+     xlab = "Step Length (m)", ylab = "Density",
+     main = "Step-Length Distribution",
+     ylim = ylimSl)
+lines(slGrid, trueSlComplex, col = "red", lwd = 2)
+legend("topright", legend = c("simple kernel", "complex kernel"),
+       col = c("blue", "red"), lwd = 2, bty = "n")
+
+# Turning angle: true marginal TA densities 
+taGrid <- seq(-pi, pi, length.out = 500)
+
+trueTaSimple  <- as.numeric(circular::dvonmises(circular::circular(taGrid), mu = circular::circular(0), kappa = 2))
+trueTaComplex <- (1 - reversalProb) * as.numeric(circular::dvonmises(circular::circular(taGrid), mu = circular::circular(0),  kappa = 5)) +
+                  reversalProb      * as.numeric(circular::dvonmises(circular::circular(taGrid), mu = circular::circular(pi), kappa = 4))
+
+ylimTa <- range(c(trueTaSimple, trueTaComplex)) * c(1, 1.15)
+
+plot(taGrid, trueTaSimple, type = "l", col = "blue", lwd = 2,
+     xlab = "Turning Angle (rad)", ylab = "Density",
+     main = "Turning-Angle Distribution",
+     ylim = ylimTa)
+lines(taGrid, trueTaComplex, col = "red", lwd = 2)
+legend("topright", legend = c("simple kernel", "complex kernel"),
+       col = c("blue", "red"), lwd = 2, bty = "n")
+
+par(mfrow = c(1, 1))
+```
+## Evaluating the traditional likelihood
+
+```{r fit-traditional}
+tradSimple  <- createRandomSteps(stpsSimple,  estimator = "traditional")
+tradComplex <- createRandomSteps(stpsComplex, estimator = "traditional")
+
+# Only look at the observed steps (case_ == TRUE): a large, honest sample
+# from the true kernel, useful to check whether the assigned `probability`
+# matches the truth.
+checkAccuracy <- function(out, trueDensityFun) {
+  obs <- out[out$case_, ]
+  trueDens <- trueDensityFun(obs$sl_, obs$ta_)
+  cor(log(trueDens + 1e-12), log(obs$probability + 1e-12))^2
+}
+
+r2TradSimple  <- checkAccuracy(tradSimple,  trueDensitySimple)
+r2TradComplex <- checkAccuracy(tradComplex, trueDensityComplex)
+
+data.frame(kernel = c("simple", "complex"),
+           R_squared_traditional = c(r2TradSimple, r2TradComplex))
+```
+
+## Evaluating the new weighted likelihood
+
+```{r fit-density}
+densSimple  <- createRandomSteps(stpsSimple,  estimator = "density")
+densComplex <- createRandomSteps(stpsComplex, estimator = "density")
+
+r2DensSimple  <- checkAccuracy(densSimple,  trueDensitySimple)
+r2DensComplex <- checkAccuracy(densComplex, trueDensityComplex)
+
+data.frame(kernel = c("simple", "complex"),
+           R_squared_density = c(r2DensSimple, r2DensComplex))
+```
+
+```{r combined-plot, fig.width = 7, fig.height = 7}
+plotAccuracy <- function(out, trueDensityFun, title, r2) {
+  obs <- out[out$case_, ]
+  trueDens <- trueDensityFun(obs$sl_, obs$ta_)
+  plot(log(trueDens + 1e-12), log(obs$probability + 1e-12),
+       pch = 16, col = grDevices::adjustcolor("grey30", alpha.f = 0.3),
+       xlab = "log(true density)", ylab = "log(assigned probability)",
+       xlim = c(-12, -4), ylim = c(-12, -4),
+       main = paste0(title, "\n(R\u00b2 = ", round(r2, 3), ")"))
+  abline(0, 1, col = "red", lwd = 2)
+}
+
+par(mfrow = c(2, 2))
+plotAccuracy(tradSimple,  trueDensitySimple,  "traditional, simple kernel",  r2TradSimple)
+plotAccuracy(tradComplex, trueDensityComplex, "traditional, complex kernel", r2TradComplex)
+plotAccuracy(densSimple,  trueDensitySimple,  "density, simple kernel",      r2DensSimple)
+plotAccuracy(densComplex, trueDensityComplex, "density, complex kernel",     r2DensComplex)
+par(mfrow = c(1, 1))
+```
+
+## Discussion
+
+For the **simple** kernel, both `"traditional"` (R² = 1) and `"density"` (R² = 0.98) assign a `probability` that closely matches the true density (R² = 1). This is the expected result since the simple kernel is exactly the Gamma/von-Mises shape `amt`'s likelihood assumes. For the **complex** kernel, however, `"traditional"`'s assigned probability drops to R² = 0.47 as forcing a single Gamma and a single von Mises onto a bimodal kernel produces systematically wrong density values, visible as clear curvature away from the red 1:1 line in the plot above. `"density"`, by contrast, still recovers the true density closely (R² = 0.92), because it never assumes a specific parametric shape in the first place.
+
+This matters because the `probability` column is fed directly into the likelihood. `dnn_ssf()` and `cnn_ssf()` take this value as their `weights` argument and subtract its log directly from the per-step loss (`weights$log()$negative()` in `dnn-ssf.R`/`cnn-ssf.R`), exactly implementing the importance-sampling correction eq. 1 requires. If this correction is wrong the model is trained against a wrong denominator for every single step, regardless of how flexible the rest of the model is. The `dnn_ssf()`/`cnn_ssf()` function even take this a step further, as they replace the entire movement-and-selection surface with a single flexible neural network (eq. 4 in the main text) rather than separate parametric movement and selection terms. Therefore, in contrast to the traditional `amt` workflow, there are no movement-kernel parameters left to "update" after fitting. The correct, estimator-agnostic `probability` weight is the only piece of information from the random-step generation process the network needs to learn both movement and habitat selection jointly and correctly, however complex the true kernel is.
