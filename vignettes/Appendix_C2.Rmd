@@ -1,180 +1,357 @@
 ---
-title: 'Appendix C2: Traditional vs. Weighted Likelihood for Non-Uniform Random Steps'
+title: "Appendix C2: Validating CNN-SSF´s ability to solve selection tasks without prior assumptions needed in DNN-models"
 author: "Mika Schubert"
-date: "2026-07-29"
-output: pdf_document
+date: "2026-08-14"
+output: html_document
 ---
 
 ```{r setup, include = FALSE}
+library(cito)
 library(citoMove)
 library(amt)
-library(circular)
+library(survival)
 ```
 
 ## Motivation
 
-Every SSF likelihood has to correct for the fact that random ("control") steps are not drawn uniformly, but from a movement-kernel distribution (see main text, eq. 1). In traditional SSF-setups like the R-package 'amt' this correction is performed *implicitly*, by fitting a Gamma distribution to step length and a von Mises distribution to turning angle, and using their densities directly as the correction term (e.g. in the function `amt::random_steps()`) . This works well as long as the true movement kernel really resembles a Gamma/von Mises distribution, which consequently results in a big limitation as real movement kernels are usually more complex ( see Appendix C1).
+Appendix B1 tested whether the CNN-SSF model can recover a habitat preference whose true functional form is non-trivial: a graphical feature (forest-edge straightness) that cannot be reduced to any single, simple pixel-summary statistic. That appendix left open the opposite, complementary question: if the true preference *can* be reduced to something as simple as the local mean pixel value, does the CNN-SSF model still recover it as well as approaches that are given this aggregation function directly?
 
-This appendix tests directly what that means for the likelihood: I simulate two movement kernels: a **simple** one (single Gamma/von Mises, matching traditional SSF's assumption) and a **complex** one (the bimodal kernel from Appendix C1) and check whether the `probability` value `createRandomSteps()` assigns to each step actually matches the *true* density it was drawn from. I do this once with `estimator = "traditional"` (the traditional `amt`-based likelihood), and once with `estimator = "density"` (the new, weighted-likelihood approach).
+To test this, a track is simulated under a single continuous image covariate, avoided according to its local mean value within a small kernel - the same `mean` aggregation function already used for the nuisance covariate in Appendix B1. Three models are then fitted on the same simulated steps and compared directly:
 
-## Simulating two movement kernels
+1. A classical **iSSF**, fitted with `amt`/`survival::clogit()`, given the true mean-aggregated covariate value directly as a linear predictor - the methodological benchmark, since both the correct aggregation function and the correct (linear) functional form are provided.
+2. A **DNN-SSF**, given the same true mean-aggregated covariate value, but without assuming a linear functional form - it must learn the shape of the relationship itself.
+3. A **CNN-SSF**, given only the raw pixel kernels around each candidate location, with no indication whatsoever that a spatial mean is the relevant aggregation - it must learn both that the mean (rather than e.g. the maximum, or some other spatial pattern) is the relevant summary, and the functional form of the preference, purely from the observed choices.
 
-Simulating and visualizing a simple (gamma/von Mises) and a complex movement Kernel.
+If the CNN-SSF model performs comparably to the two other approaches on this trivial task, this would indicate that the added flexibility of the convolutional architecture comes at little to no cost when the true preference happens to be simple - complementing the finding in Appendix B1 that this flexibility is an advantage when the true preference is graphically complex. If the CNN-SSF model instead performs noticeably worse here, this would suggest that its flexibility carries a cost in cases where a much simpler, fully parametric model would have sufficed.
 
-```{r simulate-kernels}
-set.seed(42)
-nSteps <- 3000
+## Simulating the landscape and a track
 
-simulateTrack <- function(rsl, rta) {
-  sl <- rsl(nSteps)
-  ta <- rta(nSteps)
-  heading <- cumsum(ta)
-  x <- c(0, cumsum(sl * cos(heading)))
-  y <- c(0, cumsum(sl * sin(heading)))
-  track <- amt::make_track(tbl = data.frame(x = x, y = y), .x = x, .y = y, crs = NA)
-  stps <- amt::steps(track)
-  stps[!is.na(stps$ta_), ]
-}
+A single, continuous, spatially autocorrelated image layer is simulated - the same generative process used for the continuous nuisance covariate in Appendix B1 - and a track is simulated under a single, known avoidance of this layer's local mean value.
 
-# --- Simple kernel: single Gamma step length, single von Mises turning angle ---
-rslSimple <- function(n) stats::rgamma(n, shape = 6, scale = 12)
-rtaSimple <- function(n) as.numeric(circular::rvonmises(n, mu = circular::circular(0), kappa = 2))
-stpsSimple <- simulateTrack(rslSimple, rtaSimple)
-
-# --- Complex kernel: exactly the bimodal kernel from Appendix C1 (without the
-# step-length-dependent SL-TA coupling, so the true density stays closed-form
-# for this comparison - the correlated case was already covered in Appendix C1) ---
-slShareShort <- 0.65
-rslComplex <- function(n) {
-  component <- stats::rbinom(n, 1, prob = 1 - slShareShort) + 1L
-  ifelse(component == 1,
-         stats::rgamma(n, shape = 2,  scale = 15),   # short steps
-         stats::rgamma(n, shape = 20, scale = 5))    # long steps
-}
-reversalProb <- 0.3
-rtaComplex <- function(n) {
-  isReversal <- stats::rbinom(n, 1, prob = reversalProb) == 1
-  ta <- numeric(n)
-  ta[!isReversal] <- as.numeric(circular::rvonmises(sum(!isReversal), mu = circular::circular(0),  kappa = 5))
-  ta[isReversal]  <- as.numeric(circular::rvonmises(sum(isReversal),  mu = circular::circular(pi), kappa = 4))
-  ((ta + pi) %% (2 * pi)) - pi
-}
-stpsComplex <- simulateTrack(rslComplex, rtaComplex)
+```{r landscape-variables}
+layer_size               <- 6000
+fragmentation             <- 25
+kernel_size_continuous    <- 7
+kernel_radius_continuous  <- (kernel_size_continuous - 1) / 2
+n_kernels                 <- 49   # choice set size used internally by simulateTrack()
+n_control                 <- n_kernels - 1L
+trueBeta                  <- 3
 ```
 
-```{r true-densities}
-# True joint densities (SL x TA, independent by construction) - needed below
-# to check how accurate each estimator's `probability` column really is.
-trueDensitySimple <- function(sl, ta) {
-  stats::dgamma(sl, shape = 6, scale = 12) *
-    as.numeric(circular::dvonmises(circular::circular(ta), mu = circular::circular(0), kappa = 2))
+```{r landscape-simulate}
+set.seed(2)
+
+canopyLayer <- terra::rast(
+  ncols = layer_size, nrows = layer_size,
+  ext   = terra::ext(0, layer_size, 0, layer_size)
+)
+terra::crs(canopyLayer) <- "EPSG:25833"
+terra::values(canopyLayer) <- stats::rnorm(terra::ncell(canopyLayer))
+
+canopyLayer <- terra::focal(
+  canopyLayer,
+  w         = terra::focalMat(canopyLayer, fragmentation, "Gauss"),
+  na.policy = "omit",
+  expand    = FALSE
+)
+names(canopyLayer) <- "canopy"
+
+terra::plot(canopyLayer, col = colorRampPalette(c("white", "darkgreen"))(100), main = "Simulated continuous image layer")
+```
+
+```{r simulate-tracks}
+imgLayers <- terra::sprc(canopyLayer)
+
+set.seed(1)
+trackFit <- simulateTrack(
+  xStart               = layer_size / 2,
+  yStart               = layer_size / 2,
+  tStart               = as.POSIXct("2026-01-01 00:00:00", tz = "UTC"),
+  timeStep             = "hour",
+  angleStart           = 0,
+  nSteps               = 2000,
+  nChoiceSet           = n_kernels,
+  scaleSL              = 5,
+  shapeSL              = 10,
+  kappaTA              = 1,
+  numericLayers        = NULL,
+  imageLayers          = imgLayers,
+  imageKernelDimensions = c(kernel_size_continuous),
+  imageKernelFunctions  = list(f1 = mean),
+  imageBetas            = c(trueBeta),
+  scaleNumericLayers    = TRUE,
+  scaleImageLayers      = TRUE
+)
+
+set.seed(20)
+trackVal <- simulateTrack(
+  xStart               = layer_size / 2,
+  yStart               = layer_size / 2,
+  tStart               = as.POSIXct("2026-01-01 00:00:00", tz = "UTC"),
+  timeStep             = "hour",
+  angleStart           = 0,
+  nSteps               = 200,
+  nChoiceSet           = n_kernels,
+  scaleSL              = 5,
+  shapeSL              = 10,
+  kappaTA              = 1,
+  numericLayers        = NULL,
+  imageLayers          = imgLayers,
+  imageKernelDimensions = c(kernel_size_continuous),
+  imageKernelFunctions  = list(f1 = mean),
+  imageBetas            = c(trueBeta),
+  scaleNumericLayers    = TRUE,
+  scaleImageLayers      = TRUE
+)
+
+terra::plot(canopyLayer, col = colorRampPalette(c("white", "darkgreen"))(100), main = "Simulated track (fit)")
+lines(trackFit$x_, trackFit$y_, col = "red")
+points(trackFit$x_[1], trackFit$y_[1], pch = 16, col = "red")
+lines(trackVal$x_, trackVal$y_, col = "blue")
+points(trackVal$x_[1], trackVal$y_[1], pch = 16, col = "blue")
+```
+
+## Generating random steps and the two parallel data representations
+
+Random steps are generated with `createRandomSteps()`, as in Appendix B1. For every step, the raw pixel kernel around the endpoint is extracted for the CNN-SSF model, and the local mean of that same kernel is computed as a scalar covariate for the iSSF and DNN-SSF models - both representations are therefore built from exactly the same underlying pixels, so that any difference in performance between the three models reflects the models themselves, not a difference in the information available to them.
+
+```{r build-dataset}
+matCanopy <- as.matrix(canopyLayer, wide = TRUE)
+
+extractKernelMatrix <- function(fullMat, centerRow, centerCol, radius) {
+  nr <- nrow(fullMat); nc <- ncol(fullMat)
+  rowsIdx <- (centerRow - radius):(centerRow + radius)
+  colsIdx <- (centerCol - radius):(centerCol + radius)
+  if (any(rowsIdx < 1) || any(rowsIdx > nr) ||
+      any(colsIdx < 1) || any(colsIdx > nc)) {
+    return(NULL)   # kernel would extend beyond the landscape boundary
+  }
+  fullMat[rowsIdx, colsIdx]
 }
 
-trueDensityComplex <- function(sl, ta) {
-  dSl <- slShareShort       * stats::dgamma(sl, shape = 2,  scale = 15) +
-         (1 - slShareShort) * stats::dgamma(sl, shape = 20, scale = 5)
-  dTa <- (1 - reversalProb) * as.numeric(circular::dvonmises(circular::circular(ta), mu = circular::circular(0),  kappa = 5)) +
-         reversalProb       * as.numeric(circular::dvonmises(circular::circular(ta), mu = circular::circular(pi), kappa = 4))
-  dSl * dTa
+buildComparisonDataset <- function(track, seed, nControlLocal = n_control) {
+
+  set.seed(seed)
+  randomSteps <- createRandomSteps2(
+    x            = track,
+    estimator    = "density_advanced",
+    n_control    = nControlLocal,
+    rf_n_bins    = 30,
+    rf_ntree     = 500,
+    mcmc_burn_in = 1000,
+    sl_transform = "log1p"
+  )
+
+  centerRow <- terra::rowFromY(canopyLayer, randomSteps$y2_)
+  centerCol <- terra::colFromX(canopyLayer, randomSteps$x2_)
+
+  n     <- nrow(randomSteps)
+  mats  <- vector("list", n)
+  valid <- logical(n)
+
+  for (i in seq_len(n)) {
+    if (is.na(centerRow[i]) || is.na(centerCol[i])) next
+    m <- extractKernelMatrix(matCanopy, centerRow[i], centerCol[i], kernel_radius_continuous)
+    if (!is.null(m)) {
+      mats[[i]] <- m
+      valid[i]  <- TRUE
+    }
+  }
+
+  # Discard entire choice sets containing at least one invalid kernel, so
+  # every retained choice set still has exactly n_control + 1 candidates
+  stepOk    <- tapply(valid, randomSteps$step_id_, all)
+  keepSteps <- as.numeric(names(stepOk)[stepOk])
+  keepRows  <- randomSteps$step_id_ %in% keepSteps
+
+  randomSteps <- randomSteps[keepRows, ]
+  mats        <- mats[keepRows]
+
+  cat("Complete choice sets:", length(keepSteps), "of", length(stepOk),
+      "(", round(100 * length(keepSteps) / length(stepOk), 1), "% )\n")
+
+  fullSize <- 2 * kernel_radius_continuous + 1
+  X <- array(NA_real_, dim = c(length(mats), 1, fullSize, fullSize))
+  for (i in seq_along(mats)) X[i, 1, , ] <- mats[[i]]
+
+  randomSteps$canopy <- sapply(mats, mean)
+
+  # Auf dieselbe (0,1)-Skala bringen wie in simulateTrack() (scaleImageLayers = TRUE),
+  # damit iSSF/DNN-SSF/CNN-SSF-Vergleich konsistent ist
+  rawRange <- range(terra::values(canopyLayer), na.rm = TRUE)
+  randomSteps$canopy <- (randomSteps$canopy - rawRange[1]) / diff(rawRange)
+
+  randomSteps$case_  <- as.numeric(randomSteps$case_)
+  attr(randomSteps, "n_control") <- nControlLocal
+
+  list(steps = randomSteps, X = X)
+}
+
+fit_set <- buildComparisonDataset(trackFit, seed = 100)
+val_set <- buildComparisonDataset(trackVal, seed = 200)
+
+nrow(fit_set$steps); nrow(val_set$steps)
+table(tapply(fit_set$steps$case_, fit_set$steps$step_id_, sum))
+table(tapply(val_set$steps$case_, val_set$steps$step_id_, sum))
+```
+
+### Visual check of the continuous image layer kernels 
+
+```{r visual-check}
+
+exampleStepId <- fit_set$steps$step_id_[1]
+exampleRows   <- which(fit_set$steps$step_id_ == exampleStepId)
+strataSize    <- n_control + 1
+nGrid         <- ceiling(sqrt(strataSize))
+
+canopyKernelsExample <- vector("list", length(exampleRows))
+canopyMeanExample    <- rep(NA_real_, length(exampleRows))
+
+for (j in seq_along(exampleRows)) {
+  m <- fit_set$X[exampleRows[j], 1, , ]
+  canopyKernelsExample[[j]] <- m
+  canopyMeanExample[j]      <- mean(m, na.rm = TRUE)
+}
+
+layout(matrix(c(1, 2), nrow = 2), heights = c(3, 1))
+
+par(mar = c(0.2, 0.2, 1.6, 0.2), oma = c(0, 0, 3, 0), pty = "s")
+par(mfrow = c(nGrid, nGrid))
+for (j in seq_along(canopyKernelsExample)) {
+  m <- canopyKernelsExample[[j]]
+  image(t(m[nrow(m):1, ]), col = grDevices::hcl.colors(50, "Greens 3"), axes = FALSE,
+        asp = 1, main = round(canopyMeanExample[j], 3), cex.main = 1)
+  box()
+}
+mtext("Continuous image layer kernels for the example choice set (kernel mean shown)",
+      outer = TRUE, cex = 1.2, font = 2)
+
+par(mfrow = c(1, 1), pty = "m", mar = c(4, 4, 2, 1))
+hist(canopyMeanExample, breaks = 49, col = "darkgreen",
+     main = "Distribution of kernel mean across the 49 candidates",
+     xlab = "Canopy kernel mean")
+abline(v = canopyMeanExample[as.logical(fit_set$steps$case_[exampleRows])], col = "red", lwd = 2)
+legend("topright", legend = "realized step (case_)", col = "red", lwd = 2, bty = "n")
+```
+
+
+## Accuracy function
+
+The same choice-set-wise accuracy metric is used to evaluate all three models: whether the observed step is identified as the most probable candidate within its choice set, after converting each model's raw predicted scores to within-choice-set probabilities via a softmax.
+
+```{r evaluate-function}
+evaluateAccuracyVec <- function(predRaw, data_new) {
+  df <- data.frame(step_id_ = data_new$step_id_, pred = predRaw, case_ = data_new$case_)
+  softmax <- function(x) exp(x) / sum(exp(x))
+  df$prob <- ave(df$pred, df$step_id_, FUN = softmax)
+  perStepHit <- tapply(seq_len(nrow(df)), df$step_id_, function(idx) {
+    which.max(df$prob[idx]) == which(as.logical(df$case_[idx]))
+  })
+  mean(perStepHit)
 }
 ```
 
-```{r plotting-distributions}
-par(mfrow = c(1, 2))
+## Fitting the iSSF (benchmark)
 
-# Step length: true marginal SL densities 
-slGrid <- seq(0, quantile(c(stpsSimple$sl_, stpsComplex$sl_), 0.99), length.out = 500)
+The classical `amt`/`survival::clogit()` implementation is fitted directly on the true mean-aggregated covariate, with `offset(log(probability))` applying the same importance-sampling correction that `cnn_ssf()`/`dnn_ssf()` apply internally through their `density`/`weights` arguments - without this term the comparison across models would not be on equal footing.
 
-trueSlSimple  <- dgamma(slGrid, shape = 6, scale = 12)
-trueSlComplex <- slShareShort       * dgamma(slGrid, shape = 2,  scale = 15) +
-                 (1 - slShareShort) * dgamma(slGrid, shape = 20, scale = 5)
+```{r fit-issf}
+issfFit <- amt::fit_issf(
+  data    = fit_set$steps,
+  formula = case_ ~ canopy + offset(log(probability)) + strata(step_id_),
+  model   = TRUE
+)
+summary(issfFit)
 
-ylimSl <- range(c(trueSlSimple, trueSlComplex)) * c(1, 1.15)
-
-plot(slGrid, trueSlSimple, type = "l", col = "blue", lwd = 2,
-     xlab = "Step Length (m)", ylab = "Density",
-     main = "Step-Length Distribution",
-     ylim = ylimSl)
-lines(slGrid, trueSlComplex, col = "red", lwd = 2)
-legend("topright", legend = c("simple kernel", "complex kernel"),
-       col = c("blue", "red"), lwd = 2, bty = "n")
-
-# Turning angle: true marginal TA densities 
-taGrid <- seq(-pi, pi, length.out = 500)
-
-trueTaSimple  <- as.numeric(circular::dvonmises(circular::circular(taGrid), mu = circular::circular(0), kappa = 2))
-trueTaComplex <- (1 - reversalProb) * as.numeric(circular::dvonmises(circular::circular(taGrid), mu = circular::circular(0),  kappa = 5)) +
-                  reversalProb      * as.numeric(circular::dvonmises(circular::circular(taGrid), mu = circular::circular(pi), kappa = 4))
-
-ylimTa <- range(c(trueTaSimple, trueTaComplex)) * c(1, 1.15)
-
-plot(taGrid, trueTaSimple, type = "l", col = "blue", lwd = 2,
-     xlab = "Turning Angle (rad)", ylab = "Density",
-     main = "Turning-Angle Distribution",
-     ylim = ylimTa)
-lines(taGrid, trueTaComplex, col = "red", lwd = 2)
-legend("topright", legend = c("simple kernel", "complex kernel"),
-       col = c("blue", "red"), lwd = 2, bty = "n")
-
-par(mfrow = c(1, 1))
-```
-## Evaluating the traditional likelihood
-
-```{r fit-traditional}
-tradSimple  <- createRandomSteps(stpsSimple,  estimator = "traditional")
-tradComplex <- createRandomSteps(stpsComplex, estimator = "traditional")
-
-# Only look at the observed steps (case_ == TRUE): a large, honest sample
-# from the true kernel, useful to check whether the assigned `probability`
-# matches the truth.
-checkAccuracy <- function(out, trueDensityFun) {
-  obs <- out[out$case_, ]
-  trueDens <- trueDensityFun(obs$sl_, obs$ta_)
-  cor(log(trueDens + 1e-12), log(obs$probability + 1e-12))^2
-}
-
-r2TradSimple  <- checkAccuracy(tradSimple,  trueDensitySimple)
-r2TradComplex <- checkAccuracy(tradComplex, trueDensityComplex)
-
-data.frame(kernel = c("simple", "complex"),
-           R_squared_traditional = c(r2TradSimple, r2TradComplex))
+predISSF_val <- predict(issfFit$model, newdata = val_set$steps, type = "lp")
+accISSF <- evaluateAccuracyVec(predISSF_val, val_set$steps)
+accISSF
 ```
 
-## Evaluating the new weighted likelihood
+## Fitting the DNN-SSF
 
-```{r fit-density}
-densSimple  <- createRandomSteps(stpsSimple,  estimator = "density")
-densComplex <- createRandomSteps(stpsComplex, estimator = "density")
+The DNN-SSF model is given the same true mean-aggregated covariate as the iSSF, but is not told to assume a linear relationship.
 
-r2DensSimple  <- checkAccuracy(densSimple,  trueDensitySimple)
-r2DensComplex <- checkAccuracy(densComplex, trueDensityComplex)
+```{r fit-dnn}
 
-data.frame(kernel = c("simple", "complex"),
-           R_squared_density = c(r2DensSimple, r2DensComplex))
+fit_set$steps$case_ <- as.numeric(fit_set$steps$case_) 
+
+dnnModel <- dnn_ssf(
+  case_ ~ canopy,
+  data      = fit_set$steps,
+  n_control = n_control,
+  lr        = 0.01,
+  device = "cuda",
+  epochs    = 5000
+)
+
+predDNN_val <- as.vector(predict(dnnModel, newdata = val_set$steps))
+accDNN <- evaluateAccuracyVec(predDNN_val, val_set$steps)
+accDNN
 ```
 
-```{r combined-plot, fig.width = 7, fig.height = 7}
-plotAccuracy <- function(out, trueDensityFun, title, r2) {
-  obs <- out[out$case_, ]
-  trueDens <- trueDensityFun(obs$sl_, obs$ta_)
-  plot(log(trueDens + 1e-12), log(obs$probability + 1e-12),
-       pch = 16, col = grDevices::adjustcolor("grey30", alpha.f = 0.3),
-       xlab = "log(true density)", ylab = "log(assigned probability)",
-       xlim = c(-12, -4), ylim = c(-12, -4),
-       main = paste0(title, "\n(R\u00b2 = ", round(r2, 3), ")"))
-  abline(0, 1, col = "red", lwd = 2)
-}
+## Fitting the CNN-SSF
 
-par(mfrow = c(2, 2))
-plotAccuracy(tradSimple,  trueDensitySimple,  "traditional, simple kernel",  r2TradSimple)
-plotAccuracy(tradComplex, trueDensityComplex, "traditional, complex kernel", r2TradComplex)
-plotAccuracy(densSimple,  trueDensitySimple,  "density, simple kernel",      r2DensSimple)
-plotAccuracy(densComplex, trueDensityComplex, "density, complex kernel",     r2DensComplex)
-par(mfrow = c(1, 1))
+The CNN-SSF model receives only the raw 7x7 pixel kernels, with no indication that the spatial mean is the relevant aggregation - a comparatively small architecture is used, since the true underlying relationship is expected to be simple.
+
+```{r fit-cnn}
+architecture <- create_architecture(
+  conv(n_kernels = 8L, kernel_size = c(3, 3)),
+  linear(10, activation = "selu")
+)
+
+cnnModel <- cnn_ssf(
+  X = fit_set$X, Y = as.numeric(fit_set$steps$case_),
+  density   = rep(1, nrow(fit_set$steps)),
+  n_control = n_control, architecture = architecture,
+  lr = 0.01, device = "cuda", epochs = 5000
+)
+
+predCNN_val <- as.vector(predict(cnnModel, newdata = val_set$X))
+accCNN <- evaluateAccuracyVec(predCNN_val, val_set$steps)
+accCNN
+```
+
+## Comparing accuracy and beta recovery across models
+
+For the iSSF, the recovered coefficient and its standard error are read directly from the `clogit()` summary. For the DNN-SSF and CNN-SSF models, the same regression-based recovery approach used throughout Appendix B1 is applied: each model's raw predicted score is regressed against the true, scaled covariate value, and the resulting slope is the recovered effective beta.
+
+```{r compare-models}
+trueUtilVal <- val_set$steps$canopy
+
+recoveryDNN <- lm(predDNN_val ~ trueUtilVal)
+recoveryCNN <- lm(predCNN_val ~ trueUtilVal)
+
+comparisonTable <- data.frame(
+  model          = c("iSSF (amt/clogit)", "DNN-SSF", "CNN-SSF"),
+  accuracy       = c(accISSF, accDNN, accCNN),
+  recovered_beta = c(stats::coef(issfFit$model)["canopy"],
+                      stats::coef(recoveryDNN)[2],
+                      stats::coef(recoveryCNN)[2]),
+  true_beta      = trueBeta
+)
+
+comparisonTable
+```
+
+```{r compare-plot, fig.width = 6, fig.height = 5}
+plot(trueUtilVal, predCNN_val, pch = 16, col = "grey40",
+     xlab = "True (scaled) canopy mean", ylab = "Predicted score",
+     main = "Predicted score vs. true covariate value")
+points(trueUtilVal, predDNN_val, pch = 16, col = "steelblue")
+legend("topright", legend = c("CNN-SSF", "DNN-SSF"),
+       col = c("grey40", "steelblue"), pch = 16, bty = "n")
 ```
 
 ## Discussion
 
-For the **simple** kernel, both `"traditional"` (R² = 1) and `"density"` (R² = 0.98) assign a `probability` that closely matches the true density (R² = 1). This is the expected result since the simple kernel is exactly the Gamma/von-Mises shape `amt`'s likelihood assumes. For the **complex** kernel, however, `"traditional"`'s assigned probability drops to R² = 0.47 as forcing a single Gamma and a single von Mises onto a bimodal kernel produces systematically wrong density values, visible as clear curvature away from the red 1:1 line in the plot above. `"density"`, by contrast, still recovers the true density closely (R² = 0.92), because it never assumes a specific parametric shape in the first place.
+**Accuracy.** [Fill in once all three models have been fitted to completion: report and compare the three accuracies in `comparisonTable`, relative to the random-choice baseline of 1/`r n_control + 1`.][^r1]
 
-This matters because the `probability` column is fed directly into the likelihood. `dnn_ssf()` and `cnn_ssf()` take this value as their `weights` argument and subtract its log directly from the per-step loss (`weights$log()$negative()` in `dnn-ssf.R`/`cnn-ssf.R`), exactly implementing the importance-sampling correction eq. 1 requires. If this correction is wrong the model is trained against a wrong denominator for every single step, regardless of how flexible the rest of the model is. The `dnn_ssf()`/`cnn_ssf()` function even take this a step further, as they replace the entire movement-and-selection surface with a single flexible neural network (eq. 4 in the main text) rather than separate parametric movement and selection terms. Therefore, in contrast to the traditional `amt` workflow, there are no movement-kernel parameters left to "update" after fitting. The correct, estimator-agnostic `probability` weight is the only piece of information from the random-step generation process the network needs to learn both movement and habitat selection jointly and correctly, however complex the true kernel is.
+**Beta recovery.** [Fill in: compare the three recovered coefficients to the true `imageBeta = -2`, and to each other. A close match between all three would indicate that the CNN-SSF model incurs no meaningful cost, relative to models given the correct aggregation function and functional form directly, when the true preference is in fact simple. A systematically weaker recovery for the CNN-SSF model would instead suggest a cost associated with its added flexibility in this setting - for example due to requiring proportionally more training data to identify a simple relationship than a model that is only required to estimate a single linear coefficient.][^r2]
+
+**Relation to Appendix B1.** Together with Appendix B1, which demonstrated an advantage of the CNN-SSF model on a task with a non-trivial, purely graphical true preference, this appendix completes the picture at the opposite end: a task with the simplest possible true preference. Considered jointly, the two appendices characterise the CNN-SSF model's behaviour across the range from tasks that a classical parametric approach cannot represent at all, to tasks a classical parametric approach represents optimally by construction.
+
+**Limitations.** As in Appendix B1, choice sets whose candidate steps would require a kernel extending beyond the landscape boundary are discarded rather than extracted toroidally, which is expected to introduce a mild bias against long step lengths near the landscape boundary but should not bias the comparison between the three models, since all three are fitted and validated on the identical set of retained steps. The comparison here is limited to a single, isolated covariate; how the three approaches compare when a trivial and a non-trivial covariate act simultaneously - the setting most representative of the case study - remains an open question for future work.
+
+[^r1]: Mika Schubert: Insert final accuracy values from `comparisonTable` here once all three models have been fitted to completion.
+[^r2]: Mika Schubert: Insert final recovered beta values (and, for the iSSF, its standard error from `summary(issfFit)`) here once all three models have been fitted to completion.

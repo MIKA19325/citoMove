@@ -1,19 +1,20 @@
-
-# Example workflow for plotSpatRasterCollection() and simulateTrack()
+# Example workflow for simulateTrack()
 
 # This example shows how to:
-#   1. Create different kinds of Rasters with terra, combine them to a SpatRasterCollection
-#      and plot them with plotSpatRasterCollection()
-#   2. Generate random steps with createRandomSteps()
+#   1. Create different kinds of Rasters with terra and combine them to a
+#      SpatRasterCollection
+#   2. (Optionally) look at all involved layers overlaid in a single plot,
+#      built "by hand" with terra::plot()
+#   3. Simulate an animal track with simulateTrack()
 
 # To simulate a track we need at least one object of class SpatRasterCollection
 # The object has to obtain one or multiple objects of class SpatRaster
-# Rasters can be analysed as numeric or raster layers (see description simulateTrack)
+# Rasters can be analysed as numeric or image layers (see description simulateTrack)
 # and should therefore be sorted in corresponding SpatRasterCollections
 
 # Example for simulating two numeric raster layers with the terra package,
-# combining them in an object of SpatRasterCollection and plotting them with the
-# plotSpatRasterCollection function and one SpatRasterCollection for one image layer:
+# combining them in an object of SpatRasterCollection, and one
+# SpatRasterCollection for one image layer:
 
 # Defining starting point of track as center of raster layers (e.g. EPSG:25833)
 centerX <- 820778.84
@@ -111,16 +112,45 @@ terra::plot(
 
 imgLayers <- terra::sprc(dummyImage)
 
-# The SpatRasterCollection is plotted with this function.
-# Shows only the area where all layers overlap when onlyoverlap = TRUE,
-# or the whole rasters when onlyoverlap = FALSE.
-allLayers <- terra::sprc(c(as.list(numLayers), as.list(imgLayers)))
 
-plotSpatRasterCollection(
-  allLayers,
-  colours     = c("darkblue", "darkgreen", "black"),
-  onlyoverlap = TRUE
+# To get a quick visual overview of how all layers relate to each other in
+# space, they can simply be plotted on top of each other "by hand":
+#   1. Collect all layers (numeric + image) in one list
+#   2. Plot the first layer with some transparency (alpha) so the layers
+#      underneath stay visible
+#   3. Add every following layer to the same plot with add = TRUE
+# This replaces the previous plotSpatRasterCollection() helper function -
+# for a one-off overview plot like this, doing it manually is short enough
+# that a dedicated function is not needed.
+
+allLayers <- list(layer1, layer2, dummyImage)
+colours   <- c("darkblue", "darkgreen", "black")
+
+# Restrict the plot to the area where all three layers overlap, since that is
+# also the area simulateTrack() will actually simulate on:
+xminAll <- max(sapply(allLayers, function(l) terra::ext(l)[1]))
+xmaxAll <- min(sapply(allLayers, function(l) terra::ext(l)[2]))
+yminAll <- max(sapply(allLayers, function(l) terra::ext(l)[3]))
+ymaxAll <- min(sapply(allLayers, function(l) terra::ext(l)[4]))
+extAll  <- terra::ext(xminAll, xmaxAll, yminAll, ymaxAll)
+
+terra::plot(
+  terra::crop(allLayers[[1]], extAll),
+  ext    = extAll,
+  col    = colorRampPalette(c("white", colours[1]))(100),
+  alpha  = 1 / length(allLayers),
+  legend = FALSE
 )
+for (l in 2:length(allLayers)) {
+  terra::plot(
+    terra::crop(allLayers[[l]], extAll),
+    ext    = extAll,
+    col    = colorRampPalette(c("white", colours[l]))(100),
+    alpha  = 1 / length(allLayers),
+    legend = FALSE,
+    add    = TRUE
+  )
+}
 
 
 # The track is simulated with this function.
@@ -153,8 +183,7 @@ track1 <- simulateTrack(
 head(track1)
 
 # To visualize the track, the points and/or lines function can be used,
-# adding the track to a beforehand plotted layer or SpatRasterCollection.
+# adding the track to a beforehand plotted layer or raster overlay.
 # Other tracks of the amt class track can be added to the plot in the same way.
 points(track1$x_[1], track1$y_[1], pch = 16, col = "red")
 lines(track1$x_, track1$y_, col = "red")
-

@@ -1,5 +1,5 @@
 ---
-title: 'Appendix C1: Validating Random-Step Generation with Controlled Correlated Simulated Movement Data'
+title: 'Appendix B1: Validation of citoMove´s approach of enabling complex correlated Movement Kernel Distributions in Random-Step Generation with Controlled Simulated Movement Data'
 author: "Mika Schubert"
 date: "2026-07-08"
 output: pdf_document
