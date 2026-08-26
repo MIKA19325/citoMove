@@ -125,7 +125,7 @@ BayesianTools::correlationPlot(cbind(rs_advanced$sl_, abs(rs_advanced$ta_)))
 
 ### Step length
 
-```{r sl-density-comparison, fig.width = 6, fig.height = 5}
+```{r sl-density-comparison, fig.width = 6, fig.height = 5, fig.cap = "Recovered step-length densities by estimator, compared against the true simulated distribution."}
 sl_upper  <- quantile(stps_sim$sl_, 0.99)
 bw_common <- bw.nrd0(stps_sim$sl_[stps_sim$sl_ > 0])
 
@@ -153,7 +153,7 @@ legend("topright",
 
 ### Turning angle
 
-```{r ta-density-comparison, fig.width = 6, fig.height = 5}
+```{r ta-density-comparison, fig.width = 6, fig.height = 5, fig.cap = "Recovered turning-angle densities by estimator, compared against the true simulated distribution."}
 bw_common_ta <- bw.nrd0(abs(stps_sim$ta_))
 
 dens_obs_ta         <- density(abs(stps_sim$ta_), bw = bw_common_ta)
@@ -182,7 +182,7 @@ legend("topright",
 
 To compare the correlation plots directly, I fit a regression of `|ta_|` on `sl_` for each dataset and overlay all trend lines in a single plot.
 
-```{r correlation-trend-comparison, fig.width = 6, fig.height = 5}
+```{r correlation-trend-comparison, fig.width = 6, fig.height = 5, fig.cap = "Local mean absolute turning angle as a function of step length, by estimator, compared against the true simulated trend."}
 sl_grid <- seq(0, sl_upper, length.out = 200)
 
 fit_trend <- function(sl, ta_abs) {
@@ -215,7 +215,7 @@ legend("right",
 
 `sl_transform` controls how the SL axis is binned before fitting the RF of the `"density_advanced"` estimator. `"log1p"` uses equal-width bins in `log1p(sl)`-space (fine resolution near 0, progressively coarser for large sl); `"none"` uses equal-width bins in the original sl scale. This results in a trade-off between better guessing small SL or big SL peaks in the distribution. Since our SL shoulder sits in the range where `"log1p"` binning gets coarser, this comparison is able to show this resolution trade-off in practice.
 
-```{r sl-transform-comparison, fig.width = 6, fig.height = 5}
+```{r sl-transform-comparison, fig.width = 6, fig.height = 5, fig.cap = "Effect of sl\\_transform (log1p vs. none) on recovered step-length density for the density\\_advanced estimator."}
 result_advanced_log1p <- createRandomSteps(stps_sim, estimator = "density_advanced",
                                            sl_transform = "log1p")
 result_advanced_none  <- createRandomSteps(stps_sim, estimator = "density_advanced",
@@ -243,9 +243,77 @@ legend("topright",
        lwd    = 2)
 ```
 
+## Combined overview figure
+
+To summarize all four comparisons above (SL density, TA density, SL-TA correlation trend, and the `sl_transform` excursus) in a single figure for the paper, we combine the four plots into one 2x2 panel. This reuses the plotting objects (`dens_obs`, `dens_traditional`, `trend_obs`, etc.) that were already created in the chunks above, so no data needs to be recomputed here — this chunk only controls the plot *layout*.
+
+Two new base-R plotting functions are used, explained here since they haven't come up before:
+
+- `par(mfrow = c(2, 2))` tells R to arrange the *next* plots it draws into a 2-row-by-2-column grid, filling it row by row (top-left, top-right, bottom-left, bottom-right). Everything plotted after this call goes into the next free grid cell, until the grid is full or `par(mfrow = c(1, 1))` resets it back to a single plot per figure (done at the very end of this chunk, so later chunks/plots aren't affected).
+- `par(mar = c(4, 4, 3, 1))` sets the margin (in lines of text) around each individual panel, in the order bottom/left/top/right. The default margins are a bit generous for a single large plot but leave too little room once four plots share one page, so we tighten them slightly here.
+
+Apart from this layout setup, each panel below is simply the same plotting code used earlier in this document, with a shortened title (and legends made slightly smaller with `cex = 0.7` so they fit in the smaller panels).
+
+```{r combined-overview-figure, fig.width = 10, fig.height = 9, fig.cap = "Recovery of the simulated movement kernel by createRandomSteps() estimator. (A) Step-length density, (B) turning-angle density, (C) local SL-TA correlation trend, (D) effect of sl\\_transform on step-length recovery for density\\_advanced."}
+par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
+
+# Panel A: Step-length distribution
+plot(dens_obs, col = "black", lwd = 2,
+     xlab = "Step Length (m)", ylab = "Density",
+     main = "A: MK estimator comparison for SL distribution",
+     xlim = c(0, sl_upper), ylim = ylim_all)
+lines(dens_traditional, col = "blue",      lwd = 2)
+lines(dens_density,     col = "darkgreen", lwd = 2)
+lines(dens_advanced,    col = "red",       lwd = 2)
+legend("topright",
+       legend = c("observation", "traditional", "density (KDE)", "density_advanced (RF)"),
+       col    = c("black", "blue", "darkgreen", "red"),
+       lwd = 2, cex = 0.7, bty = "n")
+
+# Panel B: Turning-angle distribution
+plot(dens_obs_ta, col = "black", lwd = 2,
+     xlab = "Turning Angle (|rad|)", ylab = "Density",
+     main = "B: MK estimator comparison for TA distribution",
+     xlim = c(0, pi), ylim = ylim_all_ta)
+lines(dens_traditional_ta, col = "blue",      lwd = 2)
+lines(dens_density_ta,     col = "darkgreen", lwd = 2)
+lines(dens_advanced_ta,    col = "red",       lwd = 2)
+legend("topright",
+       legend = c("observation", "traditional", "density (KDE)", "density_advanced (RF)"),
+       col    = c("black", "blue", "darkgreen", "red"),
+       lwd = 2, cex = 0.7, bty = "n")
+
+# Panel C: SL-TA correlation trend
+plot(sl_grid, trend_obs, type = "l", col = "black", lwd = 2,
+     xlab = "Step Length (m)", ylab = "Turning Angle (|rad|)",
+     main = "C: MK estimator comparison for SL-TA correlation trend",
+     ylim = ylim_trend)
+lines(sl_grid, trend_traditional, col = "blue",      lwd = 2)
+lines(sl_grid, trend_density,     col = "darkgreen", lwd = 2)
+lines(sl_grid, trend_advanced,    col = "red",        lwd = 2)
+legend("right",
+       legend = c("observation", "traditional", "density (KDE)", "density_advanced (RF)"),
+       col    = c("black", "blue", "darkgreen", "red"),
+       lwd = 2, cex = 0.7, bty = "n")
+
+# Panel D: sl_transform comparison
+plot(dens_obs, col = "black", lwd = 2,
+     xlab = "Step Length (m)", ylab = "Density",
+     main = "D: (Excursus) Effect of SL log transformation\nin density advanced MK estimator",
+     xlim = c(0, sl_upper), ylim = ylim_all2)
+lines(dens_advanced_log1p, col = "red",    lwd = 2)
+lines(dens_advanced_none,  col = "orange", lwd = 2)
+legend("topright",
+       legend = c("observation", "log1p", "none"),
+       col    = c("black", "red", "orange"),
+       lwd = 2, cex = 0.7, bty = "n")
+
+par(mfrow = c(1, 1))
+```
+
 ## Discussion
 
-**Correlation recovery.** The actual correlation between SL and \|TA\| in the simulated data was r ≈ -0.38. `"traditional"` reproduced essentially no correlation (consistent with fitting SL and TA as independent distributions by construction), while both `"density"` (r ≈ -0.39) and `"density_advanced"` (r ≈ -0.38) recovered the true correlation almost exactly. The correlation-trend plot confirms this in more detail: the `"traditional"` trend line is flat across the entire SL range (no dependency of \|TA\| on SL at all), whereas both `"density"` and `"density_advanced"` closely track the true declining trend. `"density_advanced"` follows the observed trend essentially everywhere, while `"density"` slightly underestimates the local mean \|TA\| at the very smallest step lengths before converging to the true trend for medium and large steps.
+**Correlation recovery.** The actual correlation between SL and \|TA\| in the simulated data was r ≈ -0.39. `"traditional"` reproduced essentially no correlation (r ≈ 0.00; consistent with fitting SL and TA as independent distributions by construction), while both `"density"` (r ≈ -0.36) and `"density_advanced"` (r ≈ -0.37) recovered the true correlation almost exactly. The correlation-trend plot confirms this in more detail: the `"traditional"` trend line is flat across the entire SL range (no dependency of \|TA\| on SL at all), whereas both `"density"` and `"density_advanced"` closely track the true declining trend. `"density_advanced"` follows the observed trend essentially everywhere, while `"density"` slightly underestimates the local mean \|TA\| at the very smallest step lengths before converging to the true trend for medium and large steps.
 
 **SL distribution recovery.** `"traditional"`, constrained to a single Gamma, produces a smooth curve that fundamentally cannot represent the shoulder around 100 m: it overestimates density in the trough between the two components (roughly 50-75 m) and underestimates both modes. `"density"` and `"density_advanced"` both closely reproduce the true complex shape, including the shoulder, essentially overlapping with the observed curve.
 

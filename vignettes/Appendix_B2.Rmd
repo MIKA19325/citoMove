@@ -15,7 +15,7 @@ library(circular)
 
 Every SSF likelihood has to correct for the fact that random ("control") steps are not drawn uniformly, but from a movement-kernel distribution (see main text, eq. 1). In traditional SSF-setups like the R-package 'amt' this correction is performed *implicitly*, by fitting a Gamma distribution to step length and a von Mises distribution to turning angle, and using their densities directly as the correction term (e.g. in the function `amt::random_steps()`) . This works well as long as the true movement kernel really resembles a Gamma/von Mises distribution, which consequently results in a big limitation as real movement kernels are usually more complex ( see Appendix C1).
 
-This appendix tests directly what that means for the likelihood: I simulate two movement kernels: a **simple** one (single Gamma/von Mises, matching traditional SSF's assumption) and a **complex** one (the bimodal kernel from Appendix C1) and check whether the `probability` value `createRandomSteps()` assigns to each step actually matches the *true* density it was drawn from. I do this once with `estimator = "traditional"` (the traditional `amt`-based likelihood), and once with `estimator = "density"` (the new, weighted-likelihood approach).
+This appendix tests directly what that means for the likelihood: I simulate two movement kernels: a **simple** one (single Gamma/von Mises, matching traditional SSF's assumption) and a **complex** one (the bimodal kernel from Appendix C1) and check whether the `probability` value `createRandomSteps()` assigns to each step actually matches the *true* density it was drawn from. I do this once with `estimator = "traditional"` (the traditional `amt`-based likelihood), and once with `estimator = "density"` (the new, weighted-likelihood approach).I then go a step further and ask whether a wrong probability merely adds noise to a fitted model, or whether it can systematically bias the the estimated habitat-selection coefficient directly.
 
 ## Simulating two movement kernels
 
@@ -173,8 +173,229 @@ plotAccuracy(densComplex, trueDensityComplex, "density, complex kernel",     r2D
 par(mfrow = c(1, 1))
 ```
 
+## Does a wrong probability actually bias a fitted selection coefficient?
+
+The previous section showed that the traditional estimator's probability values themselves are wrong (low R²) once the true kernel is bimodal. But a wrong probability only turns into a biased fitted model if movement (sl_/ta_) and habitat selection are confounded — otherwise it merely adds noise. This is a very realistic scenario: animals often move differently in different habitats (e.g. short, tortuous steps while foraging vs. long, straight steps while transiting). This section builds a small controlled example with a known true habitat-selection coefficient, generated from a choice rule that follows the iSSF assumption itself (u(y) ∝ w(habitat) · φ(sl, ta), eq. 1 in the main text), and checks whether dnn_ssf() recovers it correctly under both probability estimators.
+
+```{r confound-setup}
+# Draws n candidate steps from the same bimodal kernel as above, but this
+# time we also return WHICH step-length component ("short" or "long") each
+# candidate came from. This component is what we use right below to create a
+# strong (deliberately unrealistic-strong, to make the effect very visible)
+# link between movement and habitat.
+drawComplexKernelWithComponent <- function(n) {
+  # component = 1 -> "short step" regime (probability slShareShort = 0.65)
+  # component = 2 -> "long step" regime  (probability 1 - slShareShort)
+  component <- stats::rbinom(n, 1, prob = 1 - slShareShort) + 1L
+  sl <- ifelse(component == 1,
+               stats::rgamma(n, shape = 2,  scale = 15),   # short steps
+               stats::rgamma(n, shape = 20, scale = 5))    # long steps
+
+  isReversal <- stats::rbinom(n, 1, prob = reversalProb) == 1
+  ta <- numeric(n)
+  ta[!isReversal] <- as.numeric(circular::rvonmises(sum(!isReversal), mu = circular::circular(0),  kappa = 5))
+  ta[isReversal]  <- as.numeric(circular::rvonmises(sum(isReversal),  mu = circular::circular(pi), kappa = 4))
+  ta <- ((ta + pi) %% (2 * pi)) - pi
+
+  data.frame(sl = sl, ta = ta, component = component)
+}
+
+# Assigns a habitat value to a candidate, strongly tied to its component:
+# short-step candidates get habitat ~ +1 (e.g. "forest"), long-step
+# candidates get habitat ~ -1 (e.g. "open land"), plus a bit of noise so the
+# two groups aren't perfectly separable.
+assignHabitat <- function(component) {
+  n <- length(component)
+  ifelse(component == 1,
+         stats::rnorm(n, mean =  1, sd = 2),
+         stats::rnorm(n, mean = -1, sd = 2))
+}
+```
+
+```{r confound-simulate-replicate}
+# Simulates one full data set: nSteps strata, each with (nControl + 1)
+# candidate steps (1 "used" + nControl alternatives). The "used" step is
+# chosen following the iSSF choice rule u(y) ~ w(habitat) * phi(sl, ta)
+# (eq. 1): the true kernel density phi is genuinely part of the selection
+# process, not just a post-hoc correction term - only then does an
+# offset/weight for phi in the fitted model correspond to something that
+# actually exists in the data.
+simulateConfoundedReplicate <- function(nSteps, nControl, betaTrue) {
+
+  strataList <- vector("list", nSteps)
+
+  for (s in seq_len(nSteps)) {
+    cand <- drawComplexKernelWithComponent(nControl + 1)
+    cand$habitat <- assignHabitat(cand$component)
+
+    # True kernel density of every candidate - genuinely enters the choice,
+    # not added afterwards.
+    trueDens <- trueDensityComplex(cand$sl, cand$ta)
+
+    # u(y) ~ w(habitat) * phi(sl, ta)  <=>  log(u) = beta*habitat + log(phi)
+    score <- betaTrue * cand$habitat + log(trueDens)
+    prob  <- exp(score - max(score))
+    prob  <- prob / sum(prob)
+    usedRow <- sample(seq_len(nControl + 1), size = 1, prob = prob)
+
+    cand$case_    <- FALSE
+    cand$case_[usedRow] <- TRUE
+    cand$step_id_ <- s
+    strataList[[s]] <- cand
+  }
+
+  out <- do.call(rbind, strataList)
+
+  # True density of every candidate's (sl, ta) - reuses trueDensityComplex()
+  # from the top of this appendix.
+  out$probTrue <- trueDensityComplex(out$sl, out$ta)
+
+  # Traditional density: fit ONE Gamma (sl) and ONE von Mises (ta) to the
+  # "used" steps of THIS replicate only - exactly what
+  # createRandomSteps(estimator = "traditional") does internally via
+  # amt::random_steps().
+  obsSl <- out$sl[out$case_]
+  obsTa <- out$ta[out$case_]
+  slFit <- amt::fit_distr(obsSl, "gamma")
+  taFit <- amt::fit_distr(obsTa, "vonmises")
+  out$probTrad <- stats::dgamma(out$sl, shape = slFit$params$shape, scale = slFit$params$scale) *
+    as.numeric(circular::dvonmises(circular::circular(out$ta),
+                                    mu = taFit$params$mu, kappa = taFit$params$kappa))
+
+  # dnn_ssf2() expects case_ as numeric (0/1), not logical.
+  out$case_ <- as.numeric(out$case_)
+  out
+}
+```
+
+```{r confound-fit-function}
+# Fits dnn_ssf2() - the corrected version of dnn_ssf() (see main text/
+# Discussion below for the fix), which subtracts log(weight) from the score
+# BEFORE the softmax rather than adding it to the loss afterwards. Returns
+# the "recovered habitat effect": half the difference between the predicted
+# score at habitat = 1 and at habitat = -1. In the true data-generating
+# process these two scores are exactly +beta_true and -beta_true, so this
+# quantity is directly comparable to beta_true.
+fitHabitatEffect <- function(data, nControl, weightCol, verbose = FALSE) {
+
+  fitData <- data
+  fitData$density <- fitData[[weightCol]]
+
+  fit <- dnn_ssf2(case_ ~ habitat, data = fitData, n_control = nControl,
+                   hidden = c(4), activation = "selu", lambda = 0.01, alpha = 0.5,
+                   optimizer = "adam", lr = 0.01, epochs = 50, plot = FALSE, verbose = verbose)
+
+  pred <- stats::predict(fit, newdata = data.frame(habitat = c(-1, 1)))
+  as.numeric(pred[2] - pred[1]) / 2
+}
+```
+
+### Single-replicate sanity check
+
+Before running the full comparison, one demo replicate to check that the confound really shows up in the data, and that the fit converges.
+
+```{r confound-demo}
+set.seed(123)
+demoData <- simulateConfoundedReplicate(nSteps = 300, nControl = 20, betaTrue = 0.5)
+
+# Sanity check: short steps should have high habitat values, long steps low.
+plot(demoData$sl, demoData$habitat, pch = 16,
+     col = grDevices::adjustcolor("grey30", alpha.f = 0.3),
+     xlab = "Step Length (m)", ylab = "Habitat value",
+     main = "Confound: habitat strongly tied to step-length regime")
+
+demoEffectTrue <- fitHabitatEffect(demoData, nControl = 20, weightCol = "probTrue", verbose = TRUE)
+demoEffectTrad <- fitHabitatEffect(demoData, nControl = 20, weightCol = "probTrad", verbose = TRUE)
+
+data.frame(method = c("correct probability", "traditional probability"),
+           recovered_effect = c(demoEffectTrue, demoEffectTrad),
+           true_beta = 0.5)
+```
+
+### Replicated comparison (bias + variance)
+
+```{r confound-replicate-loop}
+set.seed(42)
+nReplicates <- 30
+betaTrue    <- 0.5
+nStepsRep   <- 300
+nControlRep <- 20
+
+effectTrue <- numeric(nReplicates)
+effectTrad <- numeric(nReplicates)
+
+for (r in seq_len(nReplicates)) {
+  repData <- simulateConfoundedReplicate(nSteps = nStepsRep, nControl = nControlRep, betaTrue = betaTrue)
+  effectTrue[r] <- fitHabitatEffect(repData, nControl = nControlRep, weightCol = "probTrue", verbose = FALSE)
+  effectTrad[r] <- fitHabitatEffect(repData, nControl = nControlRep, weightCol = "probTrad", verbose = FALSE)
+  message("Replicate ", r, "/", nReplicates, " done.")
+}
+
+betaResults <- data.frame(
+  recovered_effect = c(effectTrue, effectTrad),
+  method = rep(c("correct probability", "traditional probability"), each = nReplicates)
+)
+```
+
+```{r confound-results-plot, fig.width = 6, fig.height = 5}
+boxplot(recovered_effect ~ method, data = betaResults,
+        ylab = expression(hat(beta)[habitat]), xlab = "",
+        main = "Recovered habitat-selection effect\ncorrect vs. traditional probability weighting")
+abline(h = betaTrue, col = "red", lwd = 2, lty = 2)
+legend("topright", legend = paste0("true \u03b2 = ", betaTrue), col = "red", lwd = 2, lty = 2, bty = "n")
+```
+
+```{r confound-results-table}
+aggregate(recovered_effect ~ method, data = betaResults,
+          FUN = function(x) c(mean = mean(x), sd = sd(x), bias = mean(x) - betaTrue))
+```
+
+
+## Combined summary figure
+
+To bring both results of this appendix together in a single figure, Panel A overlays the traditional and density estimator's probability accuracy for the complex kernel in one scatter plot, and Panel B shows the resulting downstream effect on the fitted habitat-selection coefficient.
+
+```{r Combined-summary-figure}
+par(mfrow = c(1, 2), mar = c(4.5, 4.5, 3, 1))
+
+# Panel A: probability accuracy for the complex kernel only - traditional and
+# density overlaid in one scatter plot instead of two separate panels, so
+# the accuracy gap is visible at a glance.
+obsTrad  <- tradComplex[tradComplex$case_, ]
+obsDens  <- densComplex[densComplex$case_, ]
+trueTrad <- trueDensityComplex(obsTrad$sl_, obsTrad$ta_)
+trueDens <- trueDensityComplex(obsDens$sl_, obsDens$ta_)
+
+plot(log(trueTrad + 1e-12), log(obsTrad$probability + 1e-12),
+     pch = 16, col = grDevices::adjustcolor("darkgrey", alpha.f = 0.3),
+     xlab = "log(true density)", ylab = "log(assigned probability)",
+     xlim = c(-12, -4), ylim = c(-12, -4),
+     main = "A: Probability accuracy\nof a complex kernel")
+points(log(trueDens + 1e-12), log(obsDens$probability + 1e-12),
+       pch = 16, col = grDevices::adjustcolor("darkblue", alpha.f = 0.3))
+abline(0, 1, col = "red", lwd = 2)
+legend("topleft",
+       legend = c(paste0("density (R\u00b2 = ", round(r2DensComplex, 2), ")"),
+         paste0("traditional (R\u00b2 = ", round(r2TradComplex, 2), ")")),
+       col = c("darkblue", "darkgrey"), pch = 16, bty = "n", cex = 0.85)
+
+# Panel B: downstream consequence - recovered habitat-selection coefficient
+boxplot(recovered_effect ~ method, data = betaResults,
+        names = c("density", "traditional"),
+        ylab = expression(beta[habitat]), xlab = "",
+        main = "B: Downstream effect on\npreference value estimate")
+abline(h = betaTrue, col = "red", lwd = 2, lty = 2)
+#legend("topleft", legend = paste0("true \u03b2 = ", betaTrue),
+#       col = "red", lwd = 2, lty = 2, bty = "n", cex = 0.85)
+
+par(mfrow = c(1, 1))
+```
+
 ## Discussion
 
-For the **simple** kernel, both `"traditional"` (R² = 1) and `"density"` (R² = 0.98) assign a `probability` that closely matches the true density (R² = 1). This is the expected result since the simple kernel is exactly the Gamma/von-Mises shape `amt`'s likelihood assumes. For the **complex** kernel, however, `"traditional"`'s assigned probability drops to R² = 0.47 as forcing a single Gamma and a single von Mises onto a bimodal kernel produces systematically wrong density values, visible as clear curvature away from the red 1:1 line in the plot above. `"density"`, by contrast, still recovers the true density closely (R² = 0.92), because it never assumes a specific parametric shape in the first place.
+For the **simple** kernel, both "traditional" (R² = 1.00) and "density" (R² = 0.979) assign a probability that closely matches the true density. This is the expected result since the simple kernel is exactly the Gamma/von-Mises shape amt's likelihood assumes. For the **complex** kernel, however, "traditional"'s assigned probability drops sharply (R² = 0.47) as forcing a single Gamma and a single von Mises onto a bimodal kernel produces systematically wrong density values, visible as clear curvature away from the red 1:1 line in the plot above. "density", by contrast, still recovers the true density closely (R² = 0.93), because it never assumes a specific parametric shape in the first place.
 
-This matters because the `probability` column is fed directly into the likelihood. `dnn_ssf()` and `cnn_ssf()` take this value as their `weights` argument and subtract its log directly from the per-step loss (`weights$log()$negative()` in `dnn-ssf.R`/`cnn-ssf.R`), exactly implementing the importance-sampling correction eq. 1 requires. If this correction is wrong the model is trained against a wrong denominator for every single step, regardless of how flexible the rest of the model is. The `dnn_ssf()`/`cnn_ssf()` function even take this a step further, as they replace the entire movement-and-selection surface with a single flexible neural network (eq. 4 in the main text) rather than separate parametric movement and selection terms. Therefore, in contrast to the traditional `amt` workflow, there are no movement-kernel parameters left to "update" after fitting. The correct, estimator-agnostic `probability` weight is the only piece of information from the random-step generation process the network needs to learn both movement and habitat selection jointly and correctly, however complex the true kernel is.
+This matters because the probability column is fed directly into the likelihood: dnn_ssf() and cnn_ssf() take it as their weights/density argument and subtract its log from the score before the softmax, implementing the importance-sampling correction eq. 1 requires. A low R² for probability alone, however, does not automatically translate into a biased model — if habitat and movement are unrelated, a wrong probability merely adds noise. The confounded simulation above shows what happens once movement and habitat selection are linked, which is realistic for most real animals: across r nReplicates replicates, dnn_ssf() fits weighted with the correct, density-based probability recover a habitat effect close to the known true value (beta_true = 0.5; median ≈ 0.56), while fits weighted with the traditional, misspecified probability are substantially more biased (median ≈ 0.88) — nearly double the effect size the simulation actually contains. The recovered effect under the correct weighting is not perfectly calibrated to beta_true in absolute terms, a common property of flexible, regularized neural-network estimators fitted to a covariate with limited natural variation, rather than a shortcoming of the correction itself. What matters for the question this appendix asks is the relative difference between the two probability estimators, which is large and consistent across replicates.
+
+In other words, a movement-kernel misspecification does not stay contained to the movement part of the model — through the shared importance weight, it leaks into the habitat-selection estimate as well, exactly the quantity ecologists usually care about most. Since dnn_ssf()/cnn_ssf() replace the entire movement-and-selection surface with a single flexible neural network (eq. 4 in the main text) rather than separate parametric movement and selection terms, there are no movement-kernel parameters left to "update" after fitting — the correct, estimator-agnostic probability weight is the only piece of information from the random-step generation process the network needs to learn both movement and habitat selection jointly and correctly, however complex the true kernel is.
+
