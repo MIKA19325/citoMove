@@ -27,26 +27,12 @@ cnn_ssf <- function(X, Y, density = NULL, batchsize = 0.1, n_control, ...){
 
   if(is.vector(Y)) Y = matrix(Y, ncol = 1L)
 
-  n = batchsize * nrow(Y) + n_control / 2
-  batchsize = n - (n %% n_control)
+  ssf_check_strata(Y[, 1], strata_size, density)
+  batchsize = ssf_batchsize(batchsize, nrow(Y), strata_size)
 
-  custom_loss = function(pred, true, weights) {
-    Y = true[,1]
-    P = pred[,1]
-    P = P$reshape(list(nrow(pred)/strata_size, strata_size))
-    prob = torch::nnf_softmax(P, dim = 2)
-    loss = torch::distr_bernoulli(
-      prob = prob)$log_prob(Y$reshape(
-        list(nrow(pred)/strata_size, strata_size))
-      )$negative()#$mean()
-
-    if(!is.null(weights)) loss = loss + weights$log()$negative()$reshape(list(nrow(pred)/strata_size, strata_size))
-    loss = loss$mean()
-    return(loss)
-  }
   fit = cito::cnn(
     X = X, Y = Y,  shuffle = FALSE, weights = density,
-    loss = custom_loss, baseloss = FALSE, batchsize = batchsize, ...)
+    loss = ssf_custom_loss(strata_size), baseloss = FALSE, batchsize = batchsize, ...)
 
   class(fit) = c("cnn_ssf", class(fit))
 

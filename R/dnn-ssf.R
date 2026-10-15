@@ -39,37 +39,17 @@ dnn_ssf <- function(formula, data, batchsize = 0.1, n_control = NULL, ...){
     data <-  data[stats::complete.cases(data[, all.vars(formula)]), ]
   }
 
-  # Check all steps are ok
-  step_id_ = NULL
-  if(!all(table(data$step_id_) == strata_size)) {
-    message(paste0("Not all strata contain ", strata_size,  " data points."))
-    # Remove strata with
-    data <- subset(data, stats::ave(step_id_, step_id_, FUN = length) == strata_size)
-  }
 
-  n = batchsize * nrow(data) + n_control / 2
-  batchsize = n - (n %% n_control)
+  batchsize = ssf_batchsize(batchsize, nrow(data), strata_size)
 
   density = data$density
+  strata_col = if(!is.null(data$step_id_)) data$step_id_ else data$step
+  ssf_check_strata(data[[all.vars(formula)[1]]], strata_size, density, strata_col)
   if(is.null(density)) density = matrix(1.0, nrow = nrow(data))
 
-  custom_loss = function(pred, true, weights) {
-    Y = true[,1]
-    P = pred[,1]
-    P = P$reshape(list(nrow(pred)/strata_size, strata_size))
-    prob = torch::nnf_softmax(P, dim = 2)
-    loss = torch::distr_bernoulli(
-      prob = prob)$log_prob(Y$reshape(
-        list(nrow(pred)/strata_size, strata_size))
-      )$negative()#$mean()
-
-    if(!is.null(weights)) loss = loss + weights$log()$negative()$reshape(list(nrow(pred)/strata_size, strata_size))
-    loss = loss$mean()
-    return(loss)
-  }
   fit = cito::dnn(
     formula, data = data,  shuffle = FALSE,
-    loss = custom_loss, baseloss = FALSE, batchsize = batchsize, weights = density, ...)
+    loss = ssf_custom_loss(strata_size), baseloss = FALSE, batchsize = batchsize, weights = density, ...)
 
   class(fit) = c("dnn_ssf", class(fit))
 

@@ -24,7 +24,6 @@ Description: citoMove is a wrapper for the cito R package. The 'cito' package pr
 License: GPL (>= 3) + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.3
 Config/testthat/edition: 3
 Depends: 
     R (>= 3.5),
@@ -48,3 +47,4 @@ LazyData: true
 BugReports: https://github.com/citoverse/citomove/issues
 URL: https://citoverse.github.io/citomove/
 Language: en-US
+Config/roxygen2/version: 8.1.0
