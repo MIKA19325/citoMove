@@ -1,26 +1,32 @@
-
-# Example workflow for plotSpatRasterCollection() and simulateTrack()
+# Example workflow for simulateTrack()
 
 # This example shows how to:
-#   1. Create different kinds of Rasters with terra, combine them to a SpatRasterCollection
-#      and plot them with plotSpatRasterCollection()
-#   2. Generate random steps with createRandomSteps()
+#   1. Create numeric and image raster layers with terra and combine them
+#      into SpatRasterCollections
+#   2. (Optionally) look at all layers overlaid in a single plot, built
+#      "by hand" with terra::plot()
+#   3. Simulate an animal track with simulateTrack()
 
-# To simulate a track we need at least one object of class SpatRasterCollection
-# The object has to obtain one or multiple objects of class SpatRaster
-# Rasters can be analysed as numeric or raster layers (see description simulateTrack)
-# and should therefore be sorted in corresponding SpatRasterCollections
+# simulateTrack() needs at least one SpatRasterCollection containing one or
+# several SpatRasters. Layers are evaluated either as numeric layers (value of
+# a single cell at the step end point) or as image layers (aggregated values of
+# a window of cells around the end point, see ?simulateTrack), and are
+# therefore sorted into two separate SpatRasterCollections.
 
-# Example for simulating two numeric raster layers with the terra package,
-# combining them in an object of SpatRasterCollection and plotting them with the
-# plotSpatRasterCollection function and one SpatRasterCollection for one image layer:
+set.seed(42)
 
-# The first numeric layer is a layer with a continuous variable:
+# Starting point of the track, used as centre of all layers (EPSG:25833):
+centerX <- 820778.84
+centerY <- 5433014.65
+
+# The first numeric layer contains a continuous variable:
 layer1 <- terra::rast(
   ncols = 300,
   nrows = 450,
-  ext   = terra::ext(-100, 100, -150, 150)  # defining extent and resolution of the layer
-)                                            # with resolution being number of cells per map unit
+  ext   = terra::ext(centerX - 100, centerX + 100,   # extent of the layer; together with
+                     centerY - 150, centerY + 150)   # ncols/nrows it sets the resolution
+)                                                    # (here 200 m / 300 cells = 0.67 m per cell)
+terra::crs(layer1) <- "EPSG:25833"
 
 terra::values(layer1) <- stats::rnorm(terra::ncell(layer1))
 
@@ -29,21 +35,23 @@ layer1 <- terra::focal(
   w         = terra::focalMat(layer1, 3, "Gauss"),
   na.policy = "omit",
   expand    = TRUE
-)  # sampling values for the cells and smoothening them with terra::focalMat function
+)  # random cell values, smoothed with a Gaussian filter
 
 terra::plot(
   layer1,
-  col    = colorRampPalette(c("white", "darkblue"))(100),
+  col    = grDevices::colorRampPalette(c("white", "darkblue"))(100),
   legend = FALSE
 )  # plot (just for visualization)
 
 
-# The second numeric raster is a layer with a binary variable:
+# The second numeric layer contains a binary variable:
 layer2 <- terra::rast(
   ncols = 300,
   nrows = 200,
-  ext   = terra::ext(-150, 150, -100, 100)
+  ext   = terra::ext(centerX - 150, centerX + 150,
+                     centerY - 100, centerY + 100)
 )
+terra::crs(layer2) <- "EPSG:25833"
 
 terra::values(layer2) <- stats::rnorm(terra::ncell(layer2))
 
@@ -55,95 +63,118 @@ layer2 <- terra::focal(
 )
 
 threshold <- stats::quantile(terra::values(layer2), 0.5, na.rm = TRUE)
-layer2    <- as.numeric(layer2 >= threshold)  # implementing a threshold for binary values
+layer2    <- as.numeric(layer2 >= threshold)  # threshold for binary values
 
 terra::plot(
   layer2,
-  col    = c(adjustcolor(NA, alpha = 0), "darkgreen"),
+  col    = c(grDevices::adjustcolor(NA, alpha.f = 0), "darkgreen"),
   legend = FALSE
 )  # plot (just for visualization)
 
 
-# The two numeric layers of class SpatRaster are combined in an object of class SpatRasterCollection
+# Both numeric layers are combined into one SpatRasterCollection:
 numLayers <- terra::sprc(layer1, layer2)
 
 
-# The image layer is transformed as a raster with the terra package:
-# For this example we simulate a raster (dummyImage) as image layer:
+# The image layer is also a terra raster. For this example we simulate a
+# raster (dummyImage) as image layer.
 
-# An exemplary workflow for real images would be:
-#  img      <- terra::rast("path/to/your/image")
-#  img_gray <- img[[1]] * 0.299 + img[[2]] * 0.587 + img[[3]] * 0.114
-#  img_gray <- terra::flip(img_gray, direction = "vertical")
-#  img_gray <- max(terra::values(img_gray), na.rm = TRUE) - img_gray
-#  terra::ext(img_gray) <- terra::ext(-200, 200, -300, 300)
-#  terra::plot(
-#    img_gray,
-#    col    = colorRampPalette(c("white", "black"))(100),
-#    legend = FALSE
-#  )
+# With a real, georeferenced image (in the same CRS as the other layers), a
+# workflow could look like this:
+#  img      <- terra::rast("path/to/your/image.tif")
+#  img_gray <- img[[1]] * 0.299 + img[[2]] * 0.587 + img[[3]] * 0.114  # RGB to grayscale
+#  img_gray <- terra::global(img_gray, "max", na.rm = TRUE)[1, 1] - img_gray
+#              # (optional) invert, so that dark pixels get high values
+#  names(img_gray) <- "brightness"
 #  imgLayers <- terra::sprc(img_gray)
-
 
 dummyImage <- terra::rast(
   ncols = 25,
   nrows = 25,
-  ext   = terra::ext(-200, 200, -200, 200)
+  ext   = terra::ext(centerX - 200, centerX + 200,
+                     centerY - 200, centerY + 200)
 )
+terra::crs(dummyImage) <- "EPSG:25833"
 
 terra::values(dummyImage) <- stats::runif(terra::ncell(dummyImage))
 
 terra::plot(
   dummyImage,
-  col    = colorRampPalette(c("white", "black"))(100),
+  col    = grDevices::colorRampPalette(c("white", "black"))(100),
   legend = FALSE
 )
 
 imgLayers <- terra::sprc(dummyImage)
 
-# The SpatRasterCollection is plotted with this function.
-# Shows only the area where all layers overlap when onlyoverlap = TRUE,
-# or the whole rasters when onlyoverlap = FALSE.
-allLayers <- terra::sprc(c(as.list(numLayers), as.list(imgLayers)))
 
-plotSpatRasterCollection(
-  allLayers,
-  colours     = c("darkblue", "darkgreen", "black"),
-  onlyoverlap = TRUE
+# To get a quick visual overview of how all layers relate to each other in
+# space, they can be plotted on top of each other:
+#   1. Collect all layers (numeric + image) in one list
+#   2. Plot the first layer with some transparency (alpha) so that the layers
+#      underneath stay visible
+#   3. Add every following layer to the same plot with add = TRUE
+
+allLayers <- list(layer1, layer2, dummyImage)
+colours   <- c("darkblue", "darkgreen", "black")
+
+# Restrict the plot to the area where all three layers overlap, since this is
+# also the area simulateTrack() simulates on:
+xminAll <- max(sapply(allLayers, function(l) terra::ext(l)[1]))
+xmaxAll <- min(sapply(allLayers, function(l) terra::ext(l)[2]))
+yminAll <- max(sapply(allLayers, function(l) terra::ext(l)[3]))
+ymaxAll <- min(sapply(allLayers, function(l) terra::ext(l)[4]))
+extAll  <- terra::ext(xminAll, xmaxAll, yminAll, ymaxAll)
+
+terra::plot(
+  terra::crop(allLayers[[1]], extAll),
+  ext    = extAll,
+  col    = grDevices::colorRampPalette(c("white", colours[1]))(100),
+  alpha  = 1 / length(allLayers),
+  legend = FALSE
 )
+for (l in 2:length(allLayers)) {
+  terra::plot(
+    terra::crop(allLayers[[l]], extAll),
+    ext    = extAll,
+    col    = grDevices::colorRampPalette(c("white", colours[l]))(100),
+    alpha  = 1 / length(allLayers),
+    legend = FALSE,
+    add    = TRUE
+  )
+}
 
 
-# The track is simulated with this function.
-#   - numericLayers must be an object of class SpatRasterCollection containing
-#     one or multiple SpatRaster.
-#   - betas must be a vector of preference values for each of the layers.
-#     Must be same length as number of layers.
+# Simulate the track:
+#   - numericLayers / imageLayers must be SpatRasterCollections containing one
+#     or several SpatRasters.
+#   - betas / imageBetas must contain one selection coefficient per layer.
 track1 <- simulateTrack(
-  xStart               = 0,
-  yStart               = 0,
-  tStart               = as.POSIXct("2026-01-01 00:00:00", tz = "UTC"),
-  timeStep             = "hour",
-  angleStart           = 0,
-  nSteps               = 100,
-  nChoiceSet           = 100,
-  scaleSL              = 2,
-  shapeSL              = 2,
-  kappaTA              = 2,
-  numericLayers        = numLayers,
-  betas                = c(2, -1),
-  imageLayers          = imgLayers,
+  xStart                = centerX,
+  yStart                = centerY,
+  crs                   = "EPSG:25833",
+  tStart                = as.POSIXct("2026-01-01 00:00:00", tz = "UTC"),
+  timeStep              = "hour",
+  angleStart            = 0,
+  nSteps                = 100,
+  nChoiceSet            = 100,
+  scaleSL               = 2,
+  shapeSL               = 2,
+  kappaTA               = 2,
+  numericLayers         = numLayers,
+  betas                 = c(2, -1),
+  imageLayers           = imgLayers,
   imageKernelDimensions = c(3),
-  imageKernelFunctions = list(f1 = mean),
-  imageBetas           = c(3),
-  scaleNumericLayers   = TRUE,
-  scaleImageLayers     = TRUE
+  imageKernelFunctions  = list(f1 = mean),
+  imageBetas            = c(3),
+  scaleNumericLayers    = TRUE,
+  scaleImageLayers      = TRUE
 )
 
 head(track1)
 
-# To visualize the track, the points and/or lines function can be used,
-# adding the track to a beforehand plotted layer or SpatRasterCollection.
-# Other tracks of the amt class track can be added to the plot in the same way.
-points(track1$x_[1], track1$y_[1], pch = 16, col = "red")
-lines(track1$x_, track1$y_, col = "red")
-
+# To visualize the track, add it with graphics::points() and/or
+# graphics::lines() to a previously plotted layer or overlay. Other amt tracks
+# can be added in the same way. Note that the track is a continuous path and
+# can leave the plotted area (see "Boundaries" in ?simulateTrack).
+graphics::points(track1$x_[1], track1$y_[1], pch = 16, col = "red")
+graphics::lines(track1$x_, track1$y_, col = "red")

@@ -35,7 +35,10 @@ Imports:
     tibble,
     circular,
     stats,
-    ks
+    ks,
+    utils,
+    randomForest,
+    BayesianTools
 Suggests: 
     knitr,
     rmarkdown,
@@ -48,3 +51,4 @@ BugReports: https://github.com/citoverse/citomove/issues
 URL: https://citoverse.github.io/citomove/
 Language: en-US
 Config/roxygen2/version: 8.1.0
+RoxygenNote: 7.3.3
