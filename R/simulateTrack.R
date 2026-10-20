@@ -1,122 +1,140 @@
-#' @title Simulate Animal Tracks
+#' Simulate an animal track from a step selection process
 #'
-#' @description Generates a simulated animal track using the Step Selection Function (SSF)
-#' method. At each step, a set of possible steps is drawn from movement distributions
-#' (gamma for step length, von Mises for turning angle). Each possible step is evaluated
-#' using preference score derived from numeric and/or image raster layers of habitat variables,
-#' weighted by their respective beta coefficients. The next location is then chosen
-#' via a softmax (conditional logit) draw over the candidate steps, where selection
-#' probability increases exponentially with habitat score.
+#' Simulates an animal track with known movement and habitat selection
+#' parameters. At every step, a set of candidate steps is drawn from a gamma
+#' distribution (step length) and a von Mises distribution (turning angle).
+#' Each candidate is scored with a linear predictor built from numeric and/or
+#' image raster layers and their selection coefficients, and the next location
+#' is drawn among the candidates with softmax (conditional logit)
+#' probabilities. Because all parameters are known, simulated tracks can be
+#' used to test whether a fitted step selection model recovers them.
 #'
-#' @param xStart numeric. Starting x coordinate of the animal. Must lie within the
-#'   spatial overlap of all provided layers. Default: 0.
-#' @param yStart numeric. Starting y coordinate of the animal. Must lie within the
-#'   spatial overlap of all provided layers. Default: 0.
-#' @param crs object of class \code{crs} (e.g. a numeric EPSG code). CRS of the starting
-#'   coordinates \code{xStart}, \code{yStart}. Must be identical to CRS of \code{numericLayers}
-#'   and \code{imageLayers}. If \code{NULL} (default), the track is created without a CRS.
-#' @param tStart POSIXct. Starting timestamp of the track. Default: 2026-01-01 00:00:00 UTC.
-#' @param timeStep character or numeric. Time elapsed per step. Either a numeric value
-#'   (seconds) or one of: "sec", "min", "hour", "day", "week", "month", "quarter", "year".
-#'   Default: "hour".
-#' @param angleStart numeric. Starting direction of movement in degrees clockwise from
-#'   due north. Must be in (0, 360). Default: 0.
-#' @param nSteps positive integer. Number of steps to simulate. Default: 100.
-#' @param nChoiceSet positive integer. Number of candidate steps drawn at each step
-#'   (i.e. size of the choice set). Larger values increase accuracy but slow simulation.
-#'   Default: 100.
-#' @param scaleSL positive numeric. Scale parameter of the gamma distribution used to
-#'   draw step lengths. Default: 2.
-#' @param shapeSL positive numeric. Shape parameter of the gamma distribution used to
-#'   draw step lengths. Default: 2.
-#' @param kappaTA non-negative numeric. Concentration parameter of the von Mises
-#'   distribution used to draw turning angles. Higher values produce straighter tracks.
-#'   kappa = 0 corresponds to uniform (random) turning. Default: 2.
-#' @param numericLayers SpatRasterCollection. Continuous or binary raster layers used
-#'   as habitat covariates. Must have the same CRS as all other layers. If
-#'   \code{scaleNumericLayers = TRUE}, each layer is scaled to (0, 1) internally.
-#' @param betas numeric vector. Habitat preference coefficients for each layer in
-#'   \code{numericLayers}. Must have the same length as \code{numericLayers}. Positive
-#'   values indicate preference, negative values indicate avoidance.
-#' @param imageLayers SpatRasterCollection. Raster layers treated as image-like
-#'   covariates, evaluated via a spatial kernel rather than at a single point. Must
-#'   have the same CRS as all other layers. If \code{scaleImageLayers = TRUE}, each
-#'   layer is scaled to (0, 1) internally.
-#' @param imageKernelDimensions odd positive integer vector. Spatial kernel size (in
-#'   pixels) for each image layer. Must be odd and have one entry per image layer.
-#'   Default: c(3).
-#' @param imageKernelFunctions list of functions. Aggregation function applied to each
-#'   kernel window (e.g. \code{mean}, \code{max}). Must have one entry per image layer.
-#'   Default: list(f1 = mean).
-#' @param imageBetas numeric vector. Habitat preference coefficients for each image
-#'   layer. Same interpretation as \code{betas}. Default: c(3).
-#' @param scaleNumericLayers logical. If TRUE, each numeric layer is scaled to (0, 1)
-#'   based on its observed min/max before simulation. This makes \code{betas} comparable
-#'   across layers with different value ranges. Default: TRUE.
-#' @param scaleImageLayers logical. If TRUE, each image layer is scaled to (0, 1)
-#'   based on its observed min/max before simulation. Default: TRUE.
+#' @param xStart Numeric. x coordinate of the starting location. Must lie
+#'   within the spatial overlap of all layers.
+#' @param yStart Numeric. y coordinate of the starting location. Must lie
+#'   within the spatial overlap of all layers.
+#' @param crs `NULL` (default), a numeric EPSG code (e.g. `25832`) or a
+#'   character string accepted by [terra::crs()] (e.g. `"EPSG:25832"`). CRS
+#'   assigned to the returned track. Must match the CRS of `numericLayers` and
+#'   `imageLayers`. If `NULL`, the track is returned without a CRS.
+#' @param tStart `POSIXct` of length 1. Timestamp of the starting location.
+#' @param timeStep Time between consecutive locations: either a single number
+#'   (in seconds) or one of `"sec"`, `"min"`, `"hour"`, `"day"`, `"week"`,
+#'   `"month"`, `"quarter"`, `"year"`.
+#' @param angleStart Numeric, at least 0 and smaller than 360. Initial heading
+#'   in degrees, measured clockwise from north (0 = north, 90 = east).
+#' @param nSteps Positive integer. Number of steps to simulate.
+#' @param nChoiceSet Positive integer. Number of candidate steps drawn at each
+#'   step. Larger values approximate a continuous selection process more
+#'   closely but increase computation time.
+#' @param scaleSL Positive numeric. Scale parameter of the gamma distribution
+#'   for step lengths (in map units). The mean step length of the movement
+#'   kernel is `shapeSL * scaleSL`.
+#' @param shapeSL Positive numeric. Shape parameter of the gamma distribution
+#'   for step lengths.
+#' @param kappaTA Non-negative numeric. Concentration parameter of the von
+#'   Mises distribution (mean 0) for turning angles. Higher values produce
+#'   straighter tracks; `kappaTA = 0` gives uniformly distributed turning
+#'   angles.
+#' @param numericLayers `NULL` or a `SpatRasterCollection` (see
+#'   [terra::sprc()]). Layers evaluated at the end point of each candidate
+#'   step (value of a single cell).
+#' @param betas Numeric vector with one selection coefficient per layer in
+#'   `numericLayers`. Positive values indicate selection, negative values
+#'   avoidance. Ignored if `numericLayers = NULL`.
+#' @param imageLayers `NULL` or a `SpatRasterCollection`. Layers evaluated
+#'   over a square window (kernel) of cells centred on the end point of each
+#'   candidate step; the cell values in the window are aggregated to a single
+#'   value with the corresponding function in `imageKernelFunctions`.
+#' @param imageKernelDimensions Vector of odd positive integers, one per layer
+#'   in `imageLayers`. Side length of the kernel window in cells (e.g. `3`
+#'   gives a 3 x 3 window).
+#' @param imageKernelFunctions List of functions, one per layer in
+#'   `imageLayers`. Each function takes a numeric vector (the cell values in
+#'   the window) and returns a single number, e.g. `mean` or `max`.
+#' @param imageBetas Numeric vector with one selection coefficient per layer in
+#'   `imageLayers`. Same interpretation as `betas`.
+#' @param scaleNumericLayers Logical. If `TRUE` (default), each numeric layer
+#'   is rescaled to the range 0 to 1 using its minimum and maximum within the
+#'   shared extent of all layers, so that `betas` are comparable across layers.
+#' @param scaleImageLayers Logical. If `TRUE` (default), each image layer is
+#'   rescaled to the range 0 to 1 in the same way.
 #'
-#' @return An \code{amt} track object (class \code{track_xy}) with columns
-#'   \code{x_}, \code{y_}, and \code{t_}.
+#' @return A `track_xyt` object (see [amt::make_track()]) with columns `x_`,
+#'   `y_` and `t_` and `nSteps + 1` rows (the starting location plus one
+#'   location per step).
 #'
 #' @details
-#' All layers are cropped to their spatial overlap before simulation. Movement uses
-#' toroidal boundary conditions, meaning the layers repeat indefinitely at the edges of the
-#' landscape. Beta coefficients are only comparable across layers if all layers are
-#' on the same scale (i. e. \code{scaleNumericLayers} and \code{scaleImageLayers} are both TRUE).
+#' **Selection process.** For candidate step \eqn{j} with end point
+#' \eqn{s_j}, the linear predictor is
+#' \deqn{w_j = \sum_k \beta_k z_k(s_j) + \sum_l \gamma_l f_l(K_l(s_j)),}{w_j = sum_k beta_k z_k(s_j) + sum_l gamma_l f_l(K_l(s_j)),}
+#' where \eqn{z_k} are the numeric layers with coefficients `betas`,
+#' \eqn{K_l(s_j)} is the window of cells of image layer \eqn{l} around
+#' \eqn{s_j}, \eqn{f_l} the corresponding function in `imageKernelFunctions`
+#' and \eqn{\gamma_l} the coefficients `imageBetas`. The next location is
+#' drawn with probability \eqn{\exp(w_j) / \sum_i \exp(w_i)}{exp(w_j) / sum_i exp(w_i)}.
+#' Candidate steps represent movement without habitat selection; the step
+#' lengths and turning angles of the realised track therefore differ from the
+#' gamma and von Mises distributions whenever selection coefficients are not
+#' zero.
 #'
-#' Internally, three helper routines are used to build up the habitat score at every
-#' candidate location and are defined at the top of this function (they are not
-#' exported and exist only for use inside \code{simulateTrack}):
-#' \itemize{
-#'   \item \code{cropScaleRaster()} crops a single raster layer to the shared extent of
-#'     all layers and, if requested, rescales its values to the (0, 1) range.
-#'   \item \code{extractKernelValues()} reads out a square neighbourhood of pixels
-#'     around each candidate coordinate and aggregates it with \code{kernelFun}
-#'     (e.g. the mean). This is what allows image layers to be evaluated over a
-#'     small neighbourhood ("kernel") instead of just a single pixel.
-#'   \item \code{computeImageValues()} loops \code{extractKernelValues()} over all
-#'     image layers, multiplies each result with its beta coefficient, and sums
-#'     everything up to a single habitat score per candidate point.
-#' }
+#' **Boundaries.** All layers are cropped to their shared extent. Candidate
+#' end points beyond an edge of this extent are evaluated on a torus, i.e. they
+#' take the values from the opposite edge. The coordinates stored in the
+#' returned track are *not* wrapped, so the track is a continuous path that can
+#' leave the extent of the layers. When covariates are later extracted with
+#' [extractStepCovariates()], end points outside the layers are set to `NA`.
+#'
+#' **Scaling.** Coefficients are only comparable across layers if all layers
+#' are on the same scale, i.e. if `scaleNumericLayers` and `scaleImageLayers`
+#' are both `TRUE`. Note that [extractStepCovariates()] rescales each layer
+#' over its full extent, whereas this function rescales over the shared extent
+#' of all layers; use layers with identical extents if covariates extracted
+#' afterwards are to be on exactly the same scale as during simulation.
+#'
+#' **Internal helpers.** Three helper functions, defined at the top of the
+#' function body, compute the habitat score of each candidate:
+#' - `cropScaleRaster()` crops a layer to the shared extent of all layers and,
+#'   if requested, rescales its values to the range 0 to 1.
+#' - `extractKernelValues()` reads the square window of cells around each
+#'   candidate end point and aggregates it with the kernel function.
+#' - `computeImageValues()` applies `extractKernelValues()` to all image
+#'   layers, multiplies each result with its coefficient and sums them to one
+#'   image score per candidate.
+#'
+#' A progress message is printed every 1000 steps. Results are random; use
+#' [set.seed()] for reproducible tracks.
 #'
 #' @example inst/examples/simulation-example.R
 #'
-#' @export
+#' @seealso [createRandomSteps()], [extractStepCovariates()]
+#'
 #' @author Mika Schubert
+#' @export
 
-simulateTrack <- function(xStart = 0,
-                          yStart = 0,
-                          crs = NULL,
-                          tStart = as.POSIXct("2026-01-01 00:00:00", tz = "UTC"),
-                          timeStep = "hour",
-                          angleStart = 0,
-                          nSteps = 100,
-                          nChoiceSet = 100,
-                          scaleSL = 2,
-                          shapeSL = 2,
-                          kappaTA = 2,
-                          numericLayers = NULL,
-                          betas = c(-3),
-                          imageLayers = NULL,
+simulateTrack <- function(xStart                = 0,
+                          yStart                = 0,
+                          crs                   = NULL,
+                          tStart                = as.POSIXct("2026-01-01 00:00:00", tz = "UTC"),
+                          timeStep              = "hour",
+                          angleStart            = 0,
+                          nSteps                = 100,
+                          nChoiceSet            = 100,
+                          scaleSL               = 2,
+                          shapeSL               = 2,
+                          kappaTA               = 2,
+                          numericLayers         = NULL,
+                          betas                 = c(-3),
+                          imageLayers           = NULL,
                           imageKernelDimensions = c(3),
-                          imageKernelFunctions = list(f1 = mean),
-                          imageBetas = c(3),
-                          scaleNumericLayers = TRUE,
-                          scaleImageLayers = TRUE)
-{
+                          imageKernelFunctions  = list(f1 = mean),
+                          imageBetas            = c(3),
+                          scaleNumericLayers    = TRUE,
+                          scaleImageLayers      = TRUE) {
 
-  # Internal helper functions -------------------------------------------------
-  # These three functions are only ever needed inside simulateTrack(), so they
-  # are defined here as local functions instead of being exported separately.
-  # Being defined inside simulateTrack() means: they only exist while
-  # simulateTrack() is running, and they can "see" the arguments of
-  # simulateTrack() (e.g. imageKernelFunctions) without these having to be
-  # passed in explicitly every time.
-
-  # Crops a raster layer to a given extent and optionally rescales it to (0, 1).
-  # Used once per layer, right after the shared overlap extent of all layers
-  # has been determined below.
+  # Helper function: Crops a raster layer to a given extent and optionally
+  # rescales it to (0, 1). Used once per layer, right after the shared overlap
+  # extent of all layers has been determined below.
   #   layer - SpatRaster to process
   #   ext   - SpatExtent to crop to (the shared overlap extent, see below)
   #   scale - if TRUE, rescale cropped values to (0, 1); skipped if the layer
@@ -132,14 +150,11 @@ simulateTrack <- function(xStart = 0,
     r
   }
 
-  # For each coordinate pair (xs[i], ys[i]), extracts the raster values inside
-  # a square window of kernelDim x kernelDim pixels centred on that point and
-  # aggregates them with kernelFun (e.g. mean, max). This is how an "image"
-  # covariate contributes information from a neighbourhood of pixels rather
-  # than from a single point. Raster borders are wrapped toroidally, i.e. a
-  # window that runs off one edge of the raster continues on the opposite
-  # edge (consistent with the toroidal boundary conditions used for movement
-  # in the simulation loop below).
+  # Helper function: For each coordinate pair (xs[i], ys[i]), extracts the
+  # raster values inside a square window of kernelDim x kernelDim pixels
+  # centred on that point and aggregates them with kernelFun (e.g. mean, max).
+  # Raster borders are wrapped toroidally, consistent with the toroidal
+  # boundary conditions used in the simulation loop.
   #   raster    - SpatRaster to read from
   #   xs, ys    - coordinates of the query points (same length)
   #   kernelDim - odd side length (in pixels) of the square window
@@ -176,15 +191,14 @@ simulateTrack <- function(xStart = 0,
     })
   }
 
-  # Loops extractKernelValues() over all image layers, multiplies each
-  # resulting kernel value with its corresponding beta coefficient and sums
-  # everything up. Returns a single "image habitat score" per query point,
-  # combining the contribution of every image layer at once. Returns a
-  # vector of zeros if no image layers were supplied, so it can always be
-  # added to the numeric-layer contribution without an extra if-check at the
-  # call site.
+  # Helper function: Loops extractKernelValues() over all image layers,
+  # multiplies each resulting kernel value with its corresponding beta
+  # coefficient and sums everything up. Returns a single "image habitat score"
+  # per query point. Returns a vector of zeros if no image layers were
+  # supplied, so it can always be added to the numeric-layer contribution
+  # without an extra if-check at the call site.
   #   x, y                   - coordinates of the query points
-  #   imageRasters           - list of already cropped (and scaled) image SpatRasters
+  #   imageRasters           - list of already cropped image SpatRasters
   #   imageBetas             - preference coefficient per image layer
   #   imageKernelDimensions  - kernel side length per image layer
   #   imageKernelFunctions   - aggregation function per image layer
@@ -206,16 +220,29 @@ simulateTrack <- function(xStart = 0,
 
   # Validation:
   rasterList <- c(terra::as.list(numericLayers), terra::as.list(imageLayers))
-  if (!inherits(tStart, "POSIXct") || length(tStart) != 1) stop("tStart must be a single value of class 'POSIXct'")
-  if (!(is.numeric(timeStep) || timeStep %in% c("sec", "min", "hour", "day", "week", "month", "quarter", "year")) || length(timeStep) != 1)
+
+  if (!inherits(tStart, "POSIXct") || length(tStart) != 1)
+    stop("tStart must be a single value of class 'POSIXct'")
+  if (!(is.numeric(timeStep) ||
+        timeStep %in% c("sec", "min", "hour", "day", "week", "month", "quarter", "year")) ||
+      length(timeStep) != 1)
     stop("timeStep must be a single numeric value or one of: sec, min, hour, day, week, month, quarter, year")
-  if (!is.numeric(angleStart) || length(angleStart) != 1 || angleStart >= 360 || angleStart < 0) stop("angleStart must be a single positive number between 0 and 360")
-  if (!is.numeric(nSteps) || length(nSteps) != 1 || nSteps != floor(nSteps) || nSteps <= 0) stop("nSteps must be a single positive integer")
-  if (!is.numeric(nChoiceSet) || length(nChoiceSet) != 1 || nChoiceSet != floor(nChoiceSet) || nChoiceSet <= 0) stop("nChoiceSet must be a single positive integer")
-  if (!is.numeric(scaleSL) || length(scaleSL) != 1 || scaleSL <= 0) stop("scaleSL must be a single positive number")
-  if (!is.numeric(shapeSL) || length(shapeSL) != 1 || shapeSL <= 0) stop("shapeSL must be a single positive number")
-  if (!is.numeric(kappaTA) || length(kappaTA) != 1 || kappaTA < 0) stop("kappaTA must be a single non-negative number")
-  if (length(rasterList) == 0) stop("at least one layer must be provided")
+  if (!is.numeric(angleStart) || length(angleStart) != 1 || angleStart >= 360 || angleStart < 0)
+    stop("angleStart must be a single positive number between 0 and 360")
+  if (!is.numeric(nSteps) || length(nSteps) != 1 || nSteps != floor(nSteps) || nSteps <= 0)
+    stop("nSteps must be a single positive integer")
+  if (!is.numeric(nChoiceSet) || length(nChoiceSet) != 1 ||
+      nChoiceSet != floor(nChoiceSet) || nChoiceSet <= 0)
+    stop("nChoiceSet must be a single positive integer")
+  if (!is.numeric(scaleSL) || length(scaleSL) != 1 || scaleSL <= 0)
+    stop("scaleSL must be a single positive number")
+  if (!is.numeric(shapeSL) || length(shapeSL) != 1 || shapeSL <= 0)
+    stop("shapeSL must be a single positive number")
+  if (!is.numeric(kappaTA) || length(kappaTA) != 1 || kappaTA < 0)
+    stop("kappaTA must be a single non-negative number")
+  if (length(rasterList) == 0)
+    stop("at least one layer must be provided")
+
   if (length(rasterList) > 1) {
     crsList  <- sapply(rasterList, terra::crs)
     nonEmpty <- crsList[nchar(crsList) > 0]
@@ -225,37 +252,47 @@ simulateTrack <- function(xStart = 0,
   if (!is.null(crs)) {
     crs_input <- if (is.numeric(crs)) paste0("EPSG:", crs) else crs
     crs_check <- tryCatch(terra::crs(crs_input), error = function(e) "")
-    if (nchar(crs_check) == 0) stop("crs must be NULL or a valid coordinate reference system")
+    if (nchar(crs_check) == 0)
+      stop("crs must be NULL or a valid coordinate reference system")
     layerCRS <- sapply(rasterList, terra::crs)
     layerCRS <- layerCRS[nchar(layerCRS) > 0]
     if (length(layerCRS) > 0 && !all(sapply(layerCRS, terra::same.crs, crs_input)))
       stop("crs must match the CRS of numericLayers and imageLayers")
   }
   if (!is.null(numericLayers)) {
-    if (!inherits(numericLayers, "SpatRasterCollection")) stop("numericLayers must be of class 'SpatRasterCollection'")
-    if (length(betas) != length(terra::as.list(numericLayers))) stop("betas must have one entry per numericLayer")
+    if (!inherits(numericLayers, "SpatRasterCollection"))
+      stop("numericLayers must be of class 'SpatRasterCollection'")
+    if (length(betas) != length(terra::as.list(numericLayers)))
+      stop("betas must have one entry per numericLayer")
   }
   if (!is.null(imageLayers)) {
     nImageLayers <- length(terra::as.list(imageLayers))
-    if (!inherits(imageLayers, "SpatRasterCollection")) stop("imageLayers must be of class 'SpatRasterCollection'")
-    if (length(imageKernelDimensions) != nImageLayers) stop("imageKernelDimensions must have one entry per imageLayer")
-    if (length(imageKernelFunctions) != nImageLayers) stop("imageKernelFunctions must have one entry per imageLayer")
-    if (length(imageBetas) != nImageLayers) stop("imageBetas must have one entry per imageLayer")
-    if (any(imageKernelDimensions %% 2 == 0)) stop("All imageKernelDimensions must be odd numbers")
+    if (!inherits(imageLayers, "SpatRasterCollection"))
+      stop("imageLayers must be of class 'SpatRasterCollection'")
+    if (length(imageKernelDimensions) != nImageLayers)
+      stop("imageKernelDimensions must have one entry per imageLayer")
+    if (length(imageKernelFunctions) != nImageLayers)
+      stop("imageKernelFunctions must have one entry per imageLayer")
+    if (length(imageBetas) != nImageLayers)
+      stop("imageBetas must have one entry per imageLayer")
+    if (any(imageKernelDimensions %% 2 == 0))
+      stop("All imageKernelDimensions must be odd numbers")
   }
 
 
-  # Setting up numericLayer Rasters: (cutting to overlap size)
+  # Setting up rasters (cutting all layers to their shared overlap):
   xminAll <- max(sapply(rasterList, function(l) terra::ext(l)[1]))
   xmaxAll <- min(sapply(rasterList, function(l) terra::ext(l)[2]))
   yminAll <- max(sapply(rasterList, function(l) terra::ext(l)[3]))
   ymaxAll <- min(sapply(rasterList, function(l) terra::ext(l)[4]))
+  if (xminAll >= xmaxAll || yminAll >= ymaxAll)
+    stop("The provided layers must have a spatial overlap")
   extAll  <- terra::ext(xminAll, xmaxAll, yminAll, ymaxAll)
   rasters <- lapply(rasterList, function(l) terra::crop(l, extAll))
-  if (xStart < extAll[1] || xStart > extAll[2] || yStart < extAll[3] || yStart > extAll[4]) stop("Starting coordinates must be inside of overlaping layer extend")
-  if (xminAll >= xmaxAll || yminAll >= ymaxAll) stop("The provided layers must have a spatial overlap")
+  if (xStart < extAll[1] || xStart > extAll[2] || yStart < extAll[3] || yStart > extAll[4])
+    stop("Starting coordinates must lie inside the overlapping extent of all layers")
 
-  # Adding image and numeric Layers if present: (cutting to size and scaling)
+  # Adding image and numeric layers if present (cutting to size and scaling):
   imageRasters <- if (!is.null(imageLayers)) {
     lapply(terra::as.list(imageLayers),
            cropScaleRaster, ext = extAll,
@@ -276,15 +313,16 @@ simulateTrack <- function(xStart = 0,
                             Direction = numeric(nSteps + 1),
                             Change    = numeric(nSteps + 1),
                             habitat   = numeric(nSteps + 1))
-  simData$x_[1] <- xStart
-  simData$y_[1] <- yStart
-  simData$SL[1] <- 0
+  simData$x_[1]        <- xStart
+  simData$y_[1]        <- yStart
+  simData$SL[1]        <- 0
   simData$Direction[1] <- angleStart
-  simData$Change[1] <- 0
+  simData$Change[1]    <- 0
 
   numVal_start <- if (length(numericRasters) == 0) 0 else
     Reduce("+", lapply(seq_along(numericRasters), function(k)
-      betas[[k]] * terra::extract(numericRasters[[k]], cbind(simData$x_[1], simData$y_[1]))[, 1]))
+      betas[[k]] * terra::extract(numericRasters[[k]],
+                                  cbind(simData$x_[1], simData$y_[1]))[, 1]))
 
   imgVal_start <- computeImageValues(simData$x_[1],
                                      simData$y_[1],
@@ -333,7 +371,7 @@ simulateTrack <- function(xStart = 0,
     simData$SL[i + 1]        <- SLrel[chosenStep]
     simData$Direction[i + 1] <- Direction[chosenStep]
     simData$Change[i + 1]    <- Change[chosenStep]
-    simData$habitat[i+1]     <- rawLinpred[chosenStep]
+    simData$habitat[i + 1]   <- rawLinpred[chosenStep]
 
     if (i %% 1000 == 0) message("Step ", i, "/", nSteps)
   }

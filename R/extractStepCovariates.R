@@ -1,52 +1,72 @@
-#' Extract Habitat Covariates for Random Steps
+#' Extract habitat covariates at step end points
 #'
-#' Extracts covariate values at the coordinates of each step in a
-#' \code{random_steps_prop} object. For numeric layers, values are extracted
-#' directly at the endpoint. For image layers, kernel-aggregated values are
-#' computed via an internal kernel-extraction helper defined at the top of
-#' this function. Column names are taken from the layer names of each
-#' \code{SpatRaster}. Coordinates that lie outside a layer's extent are set
-#' to \code{NA} and a warning is issued.
+#' Adds one column per raster layer to a set of observed and random steps. For
+#' numeric layers, the value of the cell at the step end point (`x2_`, `y2_`)
+#' is extracted. For image layers, the cell values within a square window
+#' (kernel) around the end point are aggregated to a single value per step,
+#' e.g. their mean. The result is the tabular input for [dnn_ssf()] or for a
+#' conditional logistic regression.
 #'
-#' @param x An object of class \code{random_steps_prop} as returned by
-#'   \code{\link{createRandomSteps}}.
-#' @param numericLayers \code{SpatRasterCollection} or \code{NULL}. Continuous
-#'   or binary raster layers. Values are extracted at the step endpoint
-#'   (\code{x2_}, \code{y2_}). Coordinates outside a layer's extent are
-#'   returned as \code{NA} with a warning. If \code{scaleNumericLayers = TRUE},
-#'   each layer is scaled to (0, 1) before extraction.
-#' @param imageLayers \code{SpatRasterCollection} or \code{NULL}. Raster layers
-#'   evaluated via a spatial kernel centred on the step endpoint. Coordinates
-#'   outside a layer's extent are returned as \code{NA} with a warning. If
-#'   \code{scaleImageLayers = TRUE}, each layer is scaled to (0, 1) before
-#'   extraction.
-#' @param imageKernelDimensions odd positive integer vector. Spatial kernel size
-#'   (in pixels) for each image layer. Must be odd and have one entry per image
-#'   layer. Default: \code{c(3)}.
-#' @param imageKernelFunctions list of functions. Aggregation function applied
-#'   to each kernel window (e.g. \code{mean}, \code{max}). Must have one entry
-#'   per image layer. Default: \code{list(f1 = mean)}.
-#' @param scaleNumericLayers logical. If \code{TRUE} (default), each numeric
-#'   layer is rescaled to (0, 1) based on its observed min/max before
-#'   extraction.
-#' @param scaleImageLayers logical. If \code{TRUE} (default), each image layer
-#'   is rescaled to (0, 1) based on its observed min/max before extraction.
+#' @param x An object of class `random_steps_prop`, as returned by
+#'   [createRandomSteps()], or of class `steps_covariates`, as returned by a
+#'   previous call of this function or of [extractStepImagekernels()]. This
+#'   allows adding covariates in several calls.
+#' @param numericLayers `NULL` or a `SpatRasterCollection` (see
+#'   [terra::sprc()]). The value of the cell at each step end point is
+#'   extracted. The layer names (see [names()]) are used as column names.
+#' @param imageLayers `NULL` or a `SpatRasterCollection`. The cell values in a
+#'   square window around each step end point are aggregated with the
+#'   corresponding function in `imageKernelFunctions`. The layer names are used
+#'   as column names.
+#' @param imageKernelDimensions Vector of odd positive integers, one per layer
+#'   in `imageLayers`. Side length of the window in cells (e.g. `3` gives a
+#'   3 x 3 window).
+#' @param imageKernelFunctions List of functions, one per layer in
+#'   `imageLayers`. Each function takes a numeric vector (the cell values in
+#'   the window) and returns a single number, e.g. `mean` or `max`.
+#' @param scaleNumericLayers Logical. If `TRUE` (default), each numeric layer
+#'   is rescaled to the range 0 to 1 using its minimum and maximum before
+#'   extraction, so that coefficients are comparable across layers.
+#' @param scaleImageLayers Logical. If `TRUE` (default), each image layer is
+#'   rescaled to the range 0 to 1 in the same way.
 #'
-#' @return An object of class \code{steps_covariates} (and all classes inherited
-#'   from \code{x}) with one additional column per layer added.
-#'   Column names match the names of each layer.
+#' @return An object of class `steps_covariates` (in addition to the classes of
+#'   `x`) with one numeric column per layer, named after the layer. Values are
+#'   `NA` where the step end point lies outside the extent of the layer.
 #'
 #' @details
-#' All layers must share the same CRS.
+#' **Names.** Layer names must be unique and should not coincide with existing
+#' columns of `x`, which would be overwritten.
 #'
-#' @seealso \code{\link{createRandomSteps}}
+#' **CRS.** All layers must share the same CRS. The coordinates of `x` are
+#' assumed to be in this CRS; this is not checked.
 #'
+#' **Out-of-extent steps.** End points outside the extent of a layer are set
+#' to `NA` with a warning; coordinates are not wrapped. Windows of image layers
+#' that extend beyond the edge of a layer are completed with cells from the
+#' opposite edge (toroidal wrapping), consistent with [simulateTrack()]. `NA`
+#' cells inside a window are ignored by the aggregation. Because [dnn_ssf()]
+#' does not accept missing values, remove complete strata (all rows with the
+#' same `step_id_`) that contain `NA` before fitting.
+#'
+#' **Scaling.** Each layer is rescaled using the minimum and maximum over its
+#' full extent. [simulateTrack()] instead rescales over the shared extent of
+#' all layers; values are therefore only identical between both functions if
+#' all layers have the same extent.
+#'
+#' **Internal helpers**, defined at the top of the function body:
+#' - `cropScaleRaster()` optionally rescales a layer to the range 0 to 1.
+#' - `extractKernelValues()` reads the square window of cells around each end
+#'   point and aggregates it with the kernel function.
+#' - `checkExtent()` flags end points outside the extent of a layer and issues
+#'   the warning.
 #'
 #' @example inst/examples/dataprep-example.R
 #'
-#' @export
+#' @seealso [createRandomSteps()], [extractStepImagekernels()], [dnn_ssf()]
+#'
 #' @author Mika Schubert
-
+#' @export
 
 extractStepCovariates <- function(x,
                                   numericLayers         = NULL,
@@ -56,14 +76,8 @@ extractStepCovariates <- function(x,
                                   scaleNumericLayers    = TRUE,
                                   scaleImageLayers      = TRUE) {
 
-  # Internal helper functions ---------------------------------------------
-  # cropScaleRaster() and extractKernelValues() are also used by
-  # simulateTrack() (see simulation.R), but since local/nested functions are
-  # not visible outside the function they are defined in, they are defined
-  # again here as local copies - together with checkExtent(), which is only
-  # ever needed inside extractStepCovariates().
-
-  # Crops a raster layer to a given extent and optionally rescales it to (0, 1).
+  # Helper function: Crops a raster layer to a given extent and optionally
+  # rescales it to (0, 1).
   #   layer - SpatRaster to process
   #   ext   - SpatExtent to crop to
   #   scale - if TRUE, rescale cropped values to (0, 1); skipped if the layer
@@ -79,11 +93,10 @@ extractStepCovariates <- function(x,
     r
   }
 
-  # For each coordinate pair (xs[i], ys[i]), extracts the raster values inside
-  # a square window of kernelDim x kernelDim pixels centred on that point and
-  # aggregates them with kernelFun (e.g. mean, max). Raster borders are
-  # wrapped toroidally, i.e. a window that runs off one edge of the raster
-  # continues on the opposite edge.
+  # Helper function: For each coordinate pair (xs[i], ys[i]), extracts the
+  # raster values inside a square window of kernelDim x kernelDim pixels
+  # centred on that point and aggregates them with kernelFun (e.g. mean, max).
+  # Raster borders are wrapped toroidally.
   #   raster    - SpatRaster to read from
   #   xs, ys    - coordinates of the query points (same length)
   #   kernelDim - odd side length (in pixels) of the square window
@@ -120,10 +133,11 @@ extractStepCovariates <- function(x,
     })
   }
 
-  # Warns if any coordinates lie outside the extent of a given raster layer.
+  # Helper function: Warns if any coordinates lie outside the extent of a
+  # given raster layer.
   #   xs, ys - coordinates to check
   #   raster - SpatRaster whose extent is checked against
-  # Rueckgabe: logical vector, TRUE where the coordinate lies outside.
+  # Returns: logical vector, TRUE where the coordinate lies outside.
   checkExtent <- function(xs, ys, raster) {
     ext      <- terra::ext(raster)
     lyr_name <- names(raster)
@@ -132,18 +146,19 @@ extractStepCovariates <- function(x,
       warning(sum(outside, na.rm = TRUE),
               " coordinate(s) out of layer '", lyr_name, "' extent; set to NA.",
               call. = FALSE)
-    outside}
+    outside
+  }
 
 
   # Validation:
-
-  if (!inherits(x, c("random_steps_prop","steps_covariates") ))
+  if (!inherits(x, c("random_steps_prop", "steps_covariates")))
     stop("`x` must be an object of class 'random_steps_prop' or 'steps_covariates'.")
   if (is.null(numericLayers) && is.null(imageLayers))
     stop("At least one of `numericLayers` or `imageLayers` must be provided.")
   if (!is.null(numericLayers)) {
     if (!inherits(numericLayers, "SpatRasterCollection"))
-      stop("`numericLayers` must be of class 'SpatRasterCollection'.")}
+      stop("`numericLayers` must be of class 'SpatRasterCollection'.")
+  }
   if (!is.null(imageLayers)) {
     if (!inherits(imageLayers, "SpatRasterCollection"))
       stop("`imageLayers` must be of class 'SpatRasterCollection'.")
@@ -153,9 +168,10 @@ extractStepCovariates <- function(x,
     if (length(imageKernelFunctions) != nImage)
       stop("`imageKernelFunctions` must have one entry per image layer.")
     if (any(imageKernelDimensions %% 2 == 0))
-      stop("All `imageKernelDimensions` must be odd numbers.")}
+      stop("All `imageKernelDimensions` must be odd numbers.")
+  }
 
-  # CRS check
+  # CRS check:
   rasterList <- c(
     if (!is.null(numericLayers)) terra::as.list(numericLayers) else list(),
     if (!is.null(imageLayers))   terra::as.list(imageLayers)   else list())
@@ -163,15 +179,14 @@ extractStepCovariates <- function(x,
     crsList  <- sapply(rasterList, terra::crs)
     nonEmpty <- crsList[nchar(crsList) > 0]
     if (length(nonEmpty) > 1 && length(unique(nonEmpty)) > 1)
-      stop("All layers must have the same CRS.")}
-
+      stop("All layers must have the same CRS.")
+  }
 
   xs <- x$x2_
   ys <- x$y2_
 
 
   # Extract numeric layer values:
-
   if (!is.null(numericLayers)) {
     numericRasterList <- terra::as.list(numericLayers)
 
@@ -188,8 +203,7 @@ extractStepCovariates <- function(x,
   }
 
 
-  # Extract image layer kernel values
-
+  # Extract image layer kernel values:
   if (!is.null(imageLayers)) {
     imageRasterList <- terra::as.list(imageLayers)
 
@@ -200,8 +214,8 @@ extractStepCovariates <- function(x,
       lyr_name <- names(r)
       outside  <- checkExtent(xs, ys, r)
 
-      vals           <- rep(NA_real_, length(xs))
-      inside_idx     <- which(!outside)
+      vals       <- rep(NA_real_, length(xs))
+      inside_idx <- which(!outside)
       if (length(inside_idx) > 0) {
         vals[inside_idx] <- extractKernelValues(
           raster    = r,
@@ -216,9 +230,7 @@ extractStepCovariates <- function(x,
   }
 
 
-  # New class
-
+  # New class:
   class(x) <- c("steps_covariates", setdiff(class(x), "steps_covariates"))
   x
 }
-

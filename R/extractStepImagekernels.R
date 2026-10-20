@@ -1,34 +1,66 @@
-#' Extract Image kernels around Random Steps for CNN analysis
+#' Extract image kernels around step end points
 #'
-#' Extracts image kernels around the coordinates of each step in a
-#' \code{random_steps_prop} object. Images must be provided as one ore
-#' multiple .tif images with the same projection as the random step
-#' coordinates. Column names are taken from the image band names.
+#' For each observed and random step, cuts out a square image section (image
+#' kernel) centred on the step end point (`x2_`, `y2_`) from a set of
+#' georeferenced GeoTIFF files, e.g. orthophoto tiles. Each kernel is stored as
+#' a three-dimensional array (rows x columns x bands) with values rescaled to
+#' the range 0 to 1. The kernels are the input for [cnn_ssf()].
 #'
-#' @param x An object of class \code{random_steps_prop} as returned by
-#'   \code{\link{createRandomSteps}}
-#' @param tifDirectory Directory to folder containing the .tif data
-#'  (one or multiple .tif)
-#' @param kernelRadius Radius of the kernel around the step coordinates in meters
-#' @param imageScaling Possibility to set known scale (e.g. c(0,255) for INT1U),
-#'  if no scale provided, image data will be scaled with global min max.
-#' @param colName name of the column of kernels in the data frame
+#' @param x An object of class `random_steps_prop`, as returned by
+#'   [createRandomSteps()], or of class `steps_covariates`, as returned by
+#'   [extractStepCovariates()] or a previous call of this function.
+#' @param tifDirectory Character. Path to a folder containing one or several
+#'   GeoTIFF files (extension `.tif`) that together cover the study area. All
+#'   files must share CRS, resolution and number of bands. They are combined
+#'   into a virtual mosaic with [terra::vrt()], without loading them into
+#'   memory.
+#' @param kernelRadius Positive numeric. Half the side length of the square
+#'   kernel, in map units of the raster CRS (metres for projected CRS such as
+#'   EPSG:25832). The kernel covers the end point plus and minus
+#'   `kernelRadius` in x and y direction.
+#' @param imageScaling `NULL` (default) or a numeric vector `c(min, max)` used
+#'   to rescale all bands as `(value - min) / (max - min)`, e.g. `c(0, 255)`
+#'   for 8-bit images. If `NULL`, each band is rescaled with its minimum and
+#'   maximum over the whole mosaic, which requires reading all files and can be
+#'   slow for large mosaics.
+#' @param colName `NULL` (default) or a single character string. Name of the
+#'   new column. If `NULL`, the name of the folder `tifDirectory` is used.
 #'
-#' @return An object of class \code{steps_covariates} (and all classes inherited
-#'   from \code{x}) with one additional column per image band added.
-#'   Column names match the names of each image band.
+#' @return An object of class `steps_covariates` (in addition to the classes of
+#'   `x`) with one additional list column named `colName`. Each element is a
+#'   numeric array with dimensions `c(rows, columns, bands)`, as returned by
+#'   [terra::as.array()]: the first row is the northern edge and the first
+#'   column the western edge of the kernel. Elements are `NA` for steps whose
+#'   end point lies outside the mosaic (with a warning).
 #'
 #' @details
-#' All image and coordinate data must share the same CRS.
+#' **Kernel size.** A kernel spans about `2 * kernelRadius / res` cells per
+#' side, where `res` is the cell size of the images; its borders are snapped to
+#' the nearest cell borders. Choose `kernelRadius` such that
+#' `2 * kernelRadius` is a multiple of the cell size to obtain kernels of
+#' identical size, which [cnn_ssf()] requires. Kernels at the edge of the
+#' mosaic are truncated and therefore smaller; gaps between tiles appear as
+#' `NA` cells. Kernel dimensions can be checked with
+#' `table(sapply(x[[colName]], function(a) paste(dim(a), collapse = " x ")))`.
 #'
-#' @seealso \code{\link{createRandomSteps}}
+#' **Input for [cnn_ssf()].** [cnn_ssf()] expects an array with dimensions
+#' `c(steps, bands, rows, columns)`. If all kernels have the same size and no
+#' element is `NA`, it can be built with
+#' `aperm(simplify2array(x[[colName]]), c(4, 3, 1, 2))`.
 #'
+#' **Memory.** Kernels are stored as double-precision arrays. For example, a
+#' kernel of 100 x 100 cells with 4 bands needs about 0.3 MB, so 10 000 steps
+#' need about 3 GB of memory.
+#'
+#' **CRS.** The coordinates of `x` are assumed to be in the CRS of the images;
+#' a warning is issued if the images have no CRS.
 #'
 #' @example inst/examples/dataprep-example.R
 #'
-#' @export
+#' @seealso [createRandomSteps()], [extractStepCovariates()], [cnn_ssf()]
+#'
 #' @author Mika Schubert
-
+#' @export
 
 extractStepImagekernels <- function(x,
                                     tifDirectory = NULL,
@@ -36,10 +68,11 @@ extractStepImagekernels <- function(x,
                                     imageScaling = NULL,
                                     colName      = NULL) {
 
-  # Validation
-
+  # Validation:
   if (!inherits(x, c("random_steps_prop", "steps_covariates")))
     stop("`x` must be an object of class 'random_steps_prop' or 'steps_covariates'.")
+  if (is.null(tifDirectory) || !is.character(tifDirectory) || length(tifDirectory) != 1)
+    stop("`tifDirectory` must be a single character string.")
   if (!dir.exists(tifDirectory))
     stop("Directory does not exist: ", tifDirectory)
   if (is.null(kernelRadius))
@@ -57,8 +90,7 @@ extractStepImagekernels <- function(x,
   if (!is.null(colName) && (!is.character(colName) || length(colName) != 1))
     stop("`colName` must be a single character string.")
 
-  # Building virtual mosaic out of all .tif data with terra::vrt()
-
+  # Building virtual mosaic out of all .tif files with terra::vrt():
   tif_files <- list.files(tifDirectory, pattern = "\\.tif$", full.names = TRUE)
   if (length(tif_files) == 0) stop("No .tif files in: ", tifDirectory)
 
@@ -71,14 +103,14 @@ extractStepImagekernels <- function(x,
     colName <- basename(normalizePath(tifDirectory, mustWork = FALSE))
   }
 
-  # CRS check
+  # CRS check:
   if (is.na(terra::crs(r)) || terra::crs(r) == "")
     warning("Raster has no defined CRS. Make sure coordinates and images share the same projection.")
 
-  # Coordinates as SpatVector
+  # Coordinates as SpatVector:
   pts <- terra::vect(as.data.frame(x), geom = c("x2_", "y2_"), crs = terra::crs(r))
 
-  # Check if steps lie outside the raster coverage
+  # Check if steps lie outside the raster coverage:
   mosaic_ext <- terra::ext(r)
   xs <- x$x2_
   ys <- x$y2_
@@ -94,7 +126,7 @@ extractStepImagekernels <- function(x,
     )
   }
 
-  # Determine band min/max for normalization
+  # Determine band min/max for normalization:
   if (!is.null(imageScaling)) {
     band_min <- rep(imageScaling[1], n_bands)
     band_max <- rep(imageScaling[2], n_bands)
@@ -104,15 +136,12 @@ extractStepImagekernels <- function(x,
     band_max   <- band_range[, "max"]
   }
 
-  # Preparing list for image kernels
+  # Preparing list for image kernels (all elements start as NULL):
   kernel_list <- vector("list", nrow(x))
 
   for (i in seq_len(nrow(x))) {
 
-    if (outside[i]) {
-      kernel_list[[i]] <- list(NULL)
-      next
-    }
+    if (outside[i]) next
 
     pt <- pts[i, ]
     e  <- terra::ext(
@@ -126,13 +155,12 @@ extractStepImagekernels <- function(x,
         terra::nlyr(kernel) != n_bands) {
       warning("Step ", i, ": kernel could not be extracted; values set to NA.",
               call. = FALSE)
-      kernel_list[[i]] <- list(NULL)
     } else {
       kernel_list[[i]] <- kernel
     }
   }
 
-  # Adding kernels as one column with 3D array [nrow, ncol, n_bands]
+  # Adding kernels as one list column with 3D arrays [nrow, ncol, n_bands]:
   x[[colName]] <- lapply(kernel_list, function(k) {
     if (is.null(k)) return(NA)
 
@@ -140,7 +168,7 @@ extractStepImagekernels <- function(x,
     nc       <- terra::ncol(k)
     combined <- array(NA_real_, dim = c(nr, nc, n_bands))
 
-    arr_3d <- terra::as.array(k)                    # <-- einmal, für alle Bänder
+    arr_3d <- terra::as.array(k)
     for (b_idx in seq_len(n_bands)) {
       combined[, , b_idx] <- (arr_3d[, , b_idx] - band_min[b_idx]) /
         (band_max[b_idx] - band_min[b_idx])
@@ -149,6 +177,6 @@ extractStepImagekernels <- function(x,
     combined
   })
 
-  class(x) <- c("steps_covariates", class(x))
+  class(x) <- c("steps_covariates", setdiff(class(x), "steps_covariates"))
   return(x)
 }

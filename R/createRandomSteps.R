@@ -1,66 +1,113 @@
-#' Create Random Steps for Step Selection Functions
+#' Generate random steps with sampling densities for step selection functions
 #'
-#' Adds random (control) steps to a track or steps object, using either
-#' a 2D kernel density estimator (via \pkg{ks}) fitted on step length
-#' and turning angle, or the traditional approach (gamma + von Mises distributions).
+#' For every observed step, draws `n_control` random (control) steps from a
+#' movement kernel estimated from the observed step lengths and turning
+#' angles, and stores the density of every step under that kernel. Three
+#' estimators of the movement kernel are available: independent gamma and von
+#' Mises distributions (`"traditional"`), a bivariate kernel density estimate
+#' (`"density"`), and a random forest density surface sampled with MCMC
+#' (`"density_advanced"`). The stored densities allow correcting the
+#' likelihood of step selection models for non-uniform sampling of random
+#' steps, e.g. in [dnn_ssf()] and [cnn_ssf()].
 #'
-#' @param x An \code{amt} object of class \code{steps_xy} or \code{track_xy}.
-#' @param estimator character(1). Either \code{"density"} (2D KDE + smoothened
-#'   bootstrap via \pkg{ks}), \code{"traditional"} (gamma step-length + von Mises
-#'   turning-angle) or \code{"density_advanced"} (2D density trough Random Forest
-#'   + MCMC). Default: "density".
-#' @param n_control positive integer. Number of random steps per observed step.
-#'   Default: 10.
-#' @param rf_ntree integer(1). Nur fuer \code{estimator = "density_advanced"}:
-#'   Anzahl Baeume im Random Forest. Default: 500.
-#' @param rf_n_bins integer(1). Nur fuer \code{estimator = "density_advanced"}:
-#'   Anzahl Bins pro Achse fuer das Trainingsgitter. Default: 30.
-#' @param sl_transform character(1). Nur fuer \code{estimator = "density_advanced"}:
-#'   Wie die sl-Achse vor dem Binning behandelt wird - \code{"none"} (Default)
-#'   oder \code{"log1p"} (passend fuer stark rechtsschiefe sl-Verteilungen)
-#'   (gleich breite Bins in der Originalskala). Siehe den internen Helfer
-#'   \code{fitDensitySurfaceRF()}, der weiter unten in dieser Funktion definiert ist.
-#' @param mcmc_burn_in integer(1). Nur fuer \code{estimator = "density_advanced"}:
-#'   Burn-in-Iterationen der MCMC-Kette. Default: 1000.
+#' @param x An `amt` object of class `steps_xy`, `steps_xyt`, `track_xy` or
+#'   `track_xyt`. Tracks are converted to steps with [amt::steps()]. Steps
+#'   with missing step length, turning angle or direction (e.g. the first step
+#'   of a track) are removed.
+#' @param estimator Character. Estimator of the movement kernel:
+#'   `"density"` (default), `"traditional"` or `"density_advanced"`. See
+#'   Details.
+#' @param n_control Positive integer. Number of random steps per observed
+#'   step.
+#' @param rf_ntree Positive integer. Only used for
+#'   `estimator = "density_advanced"`: number of trees of the random forest.
+#' @param rf_n_bins Positive integer. Only used for
+#'   `estimator = "density_advanced"`: number of bins per axis (step length
+#'   and turning angle) of the grid on which the random forest is trained.
+#' @param sl_transform Character. Only used for
+#'   `estimator = "density_advanced"`: `"none"` (default) bins step lengths on
+#'   their original scale, `"log1p"` bins them on the `log1p()` scale, which
+#'   gives finer bins for short steps and suits strongly right-skewed step
+#'   length distributions. A warning is issued if set for another estimator.
+#' @param mcmc_burn_in Positive integer. Only used for
+#'   `estimator = "density_advanced"`: number of burn-in iterations of the
+#'   MCMC sampler.
 #'
+#' @return An object of class `random_steps_prop` (inheriting from
+#'   `random_steps` and `steps_xy` or `steps_xyt`). Each observed step
+#'   (`case_ = TRUE`) is followed by its `n_control` random steps
+#'   (`case_ = FALSE`), all sharing the same `step_id_` (one stratum per
+#'   observed step). The column `density` holds the density of each step's
+#'   combination of step length (`sl_`) and turning angle (`ta_`, radians)
+#'   under the estimated movement kernel. The attribute `n_control` stores
+#'   the number of random steps per stratum.
 #'
-#' @return When \code{estimator = "density"}, an object of class \code{"random_steps_kde"}
-#' with \code{n_control} random alternatives per observed step.
-#' When \code{estimator = "traditional"}, an object of class \code{"random_steps"}.
-#'
+#'   For `"traditional"`, all columns returned by [amt::random_steps()] are
+#'   kept. For `"density"` and `"density_advanced"`, the columns are
+#'   `step_id_`, `case_`, `density`, `x1_`, `x2_`, `y1_`, `y2_`, `sl_`,
+#'   `ta_` and, if present in `x`, `t1_`, `t2_` and `dt_`. For
+#'   `"density_advanced"`, the MCMC object is attached as attribute
+#'   `mcmc_out`, e.g. for [BayesianTools::tracePlot()].
 #'
 #' @details
-#' When \code{estimator = "density"}, step lengths (SL) and turning
-#' angles (TA, in radians) are extracted from all observed steps, a
-#' bivariate KDE is fitted and random steps are drawn.
-#' When \code{estimator = "traditional"}, the function \code{\link[amt]{random_steps}}
-#' of the amt package is used.
+#' **Estimators.**
+#' - `"traditional"`: random steps are generated with [amt::random_steps()],
+#'   which fits a gamma distribution to step lengths and a von Mises
+#'   distribution to turning angles. `density` is the product of both fitted
+#'   densities, i.e. step length and turning angle are assumed to be
+#'   independent.
+#' - `"density"`: a bivariate Gaussian kernel density estimate of step length
+#'   and turning angle is fitted with [ks::kde()] (plug-in bandwidth,
+#'   [ks::Hpi()]), and random steps are drawn from it with [ks::rkde()]
+#'   (smoothed bootstrap). Draws with a step length of zero or below, or a
+#'   turning angle outside -pi to pi, are discarded. Unlike the traditional
+#'   approach, this captures correlations between step length and turning
+#'   angle and multimodal distributions. Turning angles are treated as linear,
+#'   not circular, so densities close to -pi and pi are slightly
+#'   underestimated.
+#' - `"density_advanced"`: a random forest is trained on binned counts of
+#'   observed step lengths and turning angles, normalised by Monte Carlo
+#'   integration, and sampled with MCMC (\pkg{BayesianTools}). Unlike the
+#'   kernel density estimate, the surface is not pulled towards zero at the
+#'   edges of the observed range. Densities are bounded below by `1e-10`, so
+#'   that their logarithm is always finite.
 #'
-#' When \code{estimator = "density_advanced"}, four internal helper routines
-#' (not exported, and only used inside this function) implement the
-#' Random-Forest + MCMC approach:
-#' \itemize{
-#'   \item \code{fitDensitySurfaceRF()} bins the observed (sl, ta) pairs onto
-#'     a grid and trains a random forest that predicts the "landscape" of
-#'     bin counts over the (sl, ta) space. Unlike a classic KDE, the surface
-#'     is not artificially forced to zero at the edges but interpolated from
-#'     neighbouring bins.
-#'   \item \code{evalDensitySurfaceRF()} evaluates that fitted random forest
-#'     (unnormalized density) at arbitrary (sl, ta) points, applying the
-#'     Jacobian correction needed when \code{sl_transform = "log1p"} was used.
-#'   \item \code{estimateNormalizingConstantRF()} estimates, via Monte Carlo
-#'     integration, the constant needed to turn the random forest's raw
-#'     predictions into a proper probability density (one that integrates to 1).
-#'   \item \code{bayesianToolsSampleDensitySurface()} draws new (sl, ta) pairs
-#'     from that normalized surface using MCMC sampling (\pkg{BayesianTools}).
-#' }
-#' These four helpers are defined directly at the top of \code{createRandomSteps()}
-#' since they are never needed outside of it.
+#' For both density-based estimators, step lengths are considered between 0
+#' and 1.5 times the longest observed step.
+#'
+#' **Using the densities.** Random steps drawn from the movement kernel are not
+#' uniformly distributed in space. Subtracting `log(density)` from the linear
+#' predictor of each step before normalising within strata
+#' (importance-sampling correction) accounts for this. [dnn_ssf()] reads the
+#' column `density` automatically; for [cnn_ssf()], pass it as
+#' `density = x$density`. To fit without the correction, remove the column
+#' before calling [dnn_ssf()].
+#'
+#' **Internal helpers** (only used for `"density_advanced"`), defined at the
+#' top of the function body:
+#' - `fitDensitySurfaceRF()` bins the observed (step length, turning angle)
+#'   pairs onto a grid and trains a random forest that predicts the bin
+#'   counts.
+#' - `evalDensitySurfaceRF()` evaluates the fitted (unnormalised) surface at
+#'   arbitrary points, applying the Jacobian correction required for
+#'   `sl_transform = "log1p"`.
+#' - `estimateNormalizingConstantRF()` estimates, by Monte Carlo integration,
+#'   the constant that turns the surface into a density integrating to 1.
+#' - `bayesianToolsSampleDensitySurface()` draws new (step length, turning
+#'   angle) pairs from the normalised surface with the `"DEzs"` sampler of
+#'   [BayesianTools::runMCMC()].
+#'
+#' The movement kernel is estimated from all steps in `x` jointly, and
+#' `step_id_` is renumbered consecutively. Results are random; use
+#' [set.seed()] for reproducible random steps.
 #'
 #' @example inst/examples/dataprep-example.R
 #'
-#' @export
+#' @seealso [amt::random_steps()], [extractStepCovariates()],
+#'   [extractStepImagekernels()], [dnn_ssf()], [cnn_ssf()]
+#'
 #' @author Mika Schubert
+#' @export
 
 createRandomSteps <- function(x,
                               estimator    = c("density", "traditional", "density_advanced"),
@@ -70,37 +117,19 @@ createRandomSteps <- function(x,
                               sl_transform = c("none", "log1p"),
                               mcmc_burn_in = 1000) {
 
-  # Internal helper functions ---------------------------------------------
-  # All four helpers below are only ever needed for estimator =
-  # "density_advanced" (further down in this function) and nowhere else in
-  # the package, so they are defined here as local functions instead of
-  # being separate top-level functions. Being defined inside
-  # createRandomSteps() means: they only exist while createRandomSteps() is
-  # running, and bayesianToolsSampleDensitySurface() can call
-  # evalDensitySurfaceRF() directly (as a "sibling" function defined in the
-  # same enclosing function) without it having to be passed in as an argument.
-
-  # Fit a 2D density surface using a random forest.
-  #
-  # Bins die beobachteten (sl, ta)-Paare in ein Gitter und trainiert einen
-  # Random Forest, der die Haeufigkeits-"Landschaft" ueber dem (sl, ta)-Raum
-  # vorhersagt. Im Gegensatz zur KDE wird die Flaeche an den Raendern nicht
-  # kuenstlich auf 0 gezwungen, sondern aus den Nachbar-Bins interpoliert.
-  #
-  #   sl, ta       - beobachtete Step Lengths / Turning Angles (Radiant)
-  #   sl_max       - Obergrenze des sl-Gitters
-  #   n_bins_sl/ta - Anzahl Bins entlang der jeweiligen Achse
-  #   ntree        - Anzahl Baeume im Random Forest
-  #   sl_transform - "log1p": Bin-Grenzen gleich breit in der log1p(sl)-Skala.
-  #                  Macht implizit die Annahme einer rechtsschiefen
-  #                  sl-Verteilung (typisch fuer Bewegungsdaten, vgl. die
-  #                  klassische Gamma-Verteilung fuer Step Lengths). Sehr
-  #                  effektiv, wenn diese Annahme zutrifft.
-  #                  "none": gleich breite Bins in der Original-sl-Skala
-  #                  (einfachstes Verhalten - anfaellig fuer das eingangs
-  #                  beschriebene Problem bei schiefen Verteilungen).
-  #
-  # Rueckgabe: ein randomForest-Objekt.
+  # Helper function: Bins the observed (sl, ta) pairs onto a 2D grid and
+  # trains a random forest predicting the bin-count "landscape" over the
+  # (sl, ta) space. Unlike a KDE, the surface is not forced to zero at the
+  # edges but interpolated from neighbouring bins.
+  #   sl, ta       - observed step lengths / turning angles (radians)
+  #   sl_max       - upper bound of the sl grid
+  #   n_bins_sl/ta - number of bins along each axis
+  #   ntree        - number of trees in the random forest
+  #   sl_transform - "log1p": equal-width bins on the log1p(sl) scale
+  #                  (assumes a right-skewed sl distribution, as is typical
+  #                  for movement data). "none": equal-width bins on the
+  #                  original sl scale.
+  # Returns: a randomForest object (with attribute "sl_transform" attached).
   fitDensitySurfaceRF <- function(sl, ta, sl_max,
                                   n_bins_sl = 30, n_bins_ta = 30,
                                   ntree = 500,
@@ -108,175 +137,140 @@ createRandomSteps <- function(x,
 
     sl_transform <- match.arg(sl_transform)
     ta_breaks <- seq(-pi, pi, length.out = n_bins_ta + 1)
-    ta_mid    <- (head(ta_breaks, -1) + tail(ta_breaks, -1)) / 2
+    ta_mid    <- (utils::head(ta_breaks, -1) + utils::tail(ta_breaks, -1)) / 2
 
     if (sl_transform == "log1p") {
-      # --- log1p-Transformation: gleich breite Bins in der log1p(sl)-Skala ---
-      # log1p(sl) = log(1 + sl): spreizt kleine sl-Unterschiede (z.B. 5m vs.
-      # 20m), staucht grosse (z.B. 1000m vs. 1200m). Gleich breite Bins in
-      # dieser Skala entsprechen damit ungleich breiten, aber inhaltlich
-      # sinnvollen Bins im Original: schmal nahe 0, breit im Tail.
-      sl_pred    <- log1p(sl)
+      # log1p(sl) spreads out small sl differences and compresses large
+      # ones; equal-width bins on this scale are therefore narrow near 0
+      # and wide in the tail.
+      sl_pred     <- log1p(sl)
       sl_max_pred <- log1p(sl_max)
-      sl_breaks  <- seq(0, sl_max_pred, length.out = n_bins_sl + 1)
-      sl_mid     <- (head(sl_breaks, -1) + tail(sl_breaks, -1)) / 2
+      sl_breaks   <- seq(0, sl_max_pred, length.out = n_bins_sl + 1)
+      sl_mid      <- (utils::head(sl_breaks, -1) + utils::tail(sl_breaks, -1)) / 2
 
       sl_bin <- cut(sl_pred, breaks = sl_breaks, include.lowest = TRUE)
       ta_bin <- cut(ta, breaks = ta_breaks, include.lowest = TRUE)
       count_table <- table(factor(sl_bin, levels = levels(sl_bin)),
                            factor(ta_bin, levels = levels(ta_bin)))
 
-      # Bins sind in dieser (transformierten) Skala gleich breit -> rohe
-      # Zaehldaten sind direkt proportional zur Dichte in dieser Skala.
-      # Keine Division durch Bin-Breite notwendig.
-      grid_df <- expand.grid(sl_pred = sl_mid, ta = ta_mid)
+      # Bins are equal-width on this (transformed) scale, so raw counts
+      # are already proportional to density; no bin-width division needed.
+      grid_df   <- expand.grid(sl_pred = sl_mid, ta = ta_mid)
       grid_df$y <- as.vector(count_table)
 
     } else {
-      # --- "none": gleich breite Bins in der Original-sl-Skala ---
+      # "none": equal-width bins on the original sl scale.
       sl_breaks <- seq(0, sl_max, length.out = n_bins_sl + 1)
-      sl_mid    <- (head(sl_breaks, -1) + tail(sl_breaks, -1)) / 2
+      sl_mid    <- (utils::head(sl_breaks, -1) + utils::tail(sl_breaks, -1)) / 2
 
       sl_bin <- cut(sl, breaks = sl_breaks, include.lowest = TRUE)
       ta_bin <- cut(ta, breaks = ta_breaks, include.lowest = TRUE)
       count_table <- table(factor(sl_bin, levels = levels(sl_bin)),
                            factor(ta_bin, levels = levels(ta_bin)))
 
-      # Bins sind hier ebenfalls gleich breit (konstante Breite ueber den
-      # gesamten sl-Bereich) -> rohe Zaehldaten sind direkt proportional zur
-      # Dichte. Keine Division durch Bin-Breite notwendig.
-      grid_df <- expand.grid(sl_pred = sl_mid, ta = ta_mid)
+      grid_df   <- expand.grid(sl_pred = sl_mid, ta = ta_mid)
       grid_df$y <- as.vector(count_table)
     }
 
-    # Random Forest fitten: y (Zaehldaten) ~ sl_pred + ta.
     rf_fit <- randomForest::randomForest(y ~ sl_pred + ta,
                                          data  = grid_df,
                                          ntree = ntree,
-                                         mtry = 2)
+                                         mtry  = 2)
 
-    # Transformation als Attribut anhaengen, damit evalDensitySurfaceRF()
-    # spaeter automatisch weiss, wie sl vor dem predict() behandelt werden
-    # muss - ohne dass man sich das separat merken oder weiterreichen muss.
+    # Attach the transform as an attribute so evalDensitySurfaceRF() later
+    # automatically knows how to treat sl before predict() - no need to
+    # track/pass this separately.
     attr(rf_fit, "sl_transform") <- sl_transform
     rf_fit
   }
 
 
-  # Evaluate the (unnormalized) RF density surface at given points.
-  #   sl, ta  - Punkte, an denen ausgewertet werden soll
-  #   rf_fit  - randomForest-Objekt aus fitDensitySurfaceRF()
-  # Rueckgabe: numeric vector mit vorhergesagten (unnormierten) Dichtewerten.
+  # Helper function: Evaluates the (unnormalized) fitted RF density surface
+  # at arbitrary (sl, ta) points, applying the Jacobian correction needed
+  # when the RF was trained on the log1p(sl) scale.
+  #   sl, ta - points at which to evaluate
+  #   rf_fit - randomForest object from fitDensitySurfaceRF()
+  # Returns: numeric vector of predicted (unnormalized) density values.
   evalDensitySurfaceRF <- function(sl, ta, rf_fit) {
-    # sl_transform wurde beim Fitten als Attribut gespeichert (siehe
-    # fitDensitySurfaceRF()) - dadurch muss man sich diese Information nicht
-    # separat merken und an jede Stelle weiterreichen, an der das Modell
-    # ausgewertet wird.
     sl_transform <- attr(rf_fit, "sl_transform")
 
     if (sl_transform == "log1p") {
-      # Der RF wurde auf log1p(sl) trainiert -> dieselbe Transformation muss
-      # vor dem predict() angewendet werden.
+      # RF was trained on log1p(sl) -> apply the same transform before predict().
       sl_pred <- log1p(sl)
-      pred <- stats::predict(rf_fit, newdata = data.frame(sl_pred = sl_pred, ta = ta))
+      pred    <- stats::predict(rf_fit, newdata = data.frame(sl_pred = sl_pred, ta = ta))
 
-      # JACOBIAN-KORREKTUR: Die RF-Vorhersage ist eine Dichte in der log1p(sl)-
-      # Skala, nicht in der Original-sl-Skala. Beim Zuruecktransformieren
-      # einer Dichte von einer Skala in eine andere muss man mit der
-      # Ableitung der Transformation multiplizieren:
-      #   d(log1p(sl))/d(sl) = 1 / (1 + sl)
-      # Ohne diese Korrektur wuerde die Dichte im Tail (grosse sl)
-      # systematisch ueberschaetzt.
+      # Jacobian correction: the RF prediction is a density on the
+      # log1p(sl) scale, not the original sl scale. Converting a density
+      # between scales requires multiplying by the derivative of the
+      # transform: d(log1p(sl))/d(sl) = 1 / (1 + sl). Without this, the
+      # tail (large sl) density would be systematically overestimated.
       jacobian <- 1 / (1 + sl)
-      dens <- pred * jacobian
+      dens     <- pred * jacobian
 
     } else {
-      # "none": der RF wurde direkt auf der Original-sl-Skala mit rohen
-      # Zaehldaten als Zielvariable trainiert (siehe fitDensitySurfaceRF()) -
-      # die Bins sind dort konstant breit, daher ist keine Rueck-
-      # Transformation oder Jacobian-Korrektur notwendig.
+      # "none": RF was trained directly on the original sl scale with
+      # constant-width bins, so no back-transform / Jacobian is needed.
       pred <- stats::predict(rf_fit, newdata = data.frame(sl_pred = sl, ta = ta))
       dens <- pred
     }
 
-    # pmax(..., 0): numerische Rundungsfehler koennen winzige negative Werte
-    # erzeugen, die wir hier auf 0 abschneiden (eine Dichte kann nicht negativ sein).
+    # pmax(..., 0): clip tiny negative values from numerical rounding
+    # (a density cannot be negative).
     pmax(dens, 0)
   }
 
-
-  # Estimate the normalizing constant via Monte Carlo integration.
-  #
-  # predict() auf einem randomForest liefert keine echte Dichte (das Integral
-  # ueber den gesamten Raum ist im Allgemeinen ungleich 1). Um daraus eine
-  # gueltige Wahrscheinlichkeitsdichte zu machen, schaetzen wir das Integral
-  # der Flaeche numerisch (Monte-Carlo-Integration) und teilen spaeter durch
-  # diesen Wert.
-  #
-  # Idee: Integral ueber ein Rechteck = (Flaeche des Rechtecks) * (Mittelwert
-  # der Funktion innerhalb des Rechtecks). Den Mittelwert schaetzen wir, indem
-  # wir viele zufaellige Punkte gleichmaessig im Rechteck ziehen und dort die
-  # Funktion auswerten.
-  #
-  #   rf_fit - randomForest-Objekt
-  #   sl_max - Obergrenze des sl-Bereichs
-  #   n_mc   - Anzahl der Monte-Carlo-Stichproben
-  # Rueckgabe: numeric(1). Geschaetzte Normierungskonstante Z.
+  # Helper function: Estimates the normalizing constant Z via Monte Carlo
+  # integration, so the raw RF surface can be turned into a proper density
+  # (one that integrates to 1). Draws n_mc uniform points over the
+  # [0, sl_max] x [-pi, pi] rectangle, evaluates the surface there, and
+  # multiplies the mean value by the rectangle's area.
+  #   rf_fit - randomForest object
+  #   sl_max - upper bound of the sl range
+  #   n_mc   - number of Monte Carlo samples
+  # Returns: numeric(1), the estimated normalizing constant Z.
   estimateNormalizingConstantRF <- function(rf_fit, sl_max, n_mc = 20000) {
-    mc_sl <- stats::runif(n_mc, 0, sl_max)
-    mc_ta <- stats::runif(n_mc, -pi, pi)
+    mc_sl   <- stats::runif(n_mc, 0, sl_max)
+    mc_ta   <- stats::runif(n_mc, -pi, pi)
     mc_vals <- evalDensitySurfaceRF(mc_sl, mc_ta, rf_fit)
 
-    # Flaeche des Rechtecks [0, sl_max] x [-pi, pi]
     domain_area <- sl_max * 2 * pi
-
     mean(mc_vals) * domain_area
   }
 
-
-  # Draw samples from the normalized RF surface via BayesianTools MCMC.
-  #
-  # Verwendet BayesianTools, um aus der (unnormierten) RF-Flaeche neue
-  # (sl, ta)-Paare zu ziehen. BayesianTools erwartet eine Zielfunktion, die
-  # eine LOG-Dichte zurueckgibt (nicht die Dichte selbst) - das ist Standard
-  # bei MCMC-Verfahren, da log-Werte numerisch stabiler sind.
-  #
-  #   n          - gewuenschte Anzahl an Samples (nach Burn-in)
-  #   rf_fit     - randomForest-Objekt
-  #   sl_max     - Obergrenze des sl-Bereichs
-  #   burn_in    - Anzahl der zu verwerfenden initialen Iterationen
-  #   iterations - Gesamtzahl der MCMC-Iterationen; falls NULL, automatisch
-  #                auf burn_in + n * 5 gesetzt
-  #
-  # Rueckgabe: eine Liste mit zwei Elementen:
-  #   samples  - Matrix mit Spalten "sl" und "ta"
-  #   mcmc_out - das vollstaendige BayesianTools-MCMC-Objekt, z.B. fuer
-  #              BayesianTools::tracePlot() oder gelmanDiagnostics()
+  # Helper function: Draws new (sl, ta) pairs from the normalized RF
+  # surface via MCMC (BayesianTools). BayesianTools expects a target
+  # function returning a LOG-density (standard for MCMC, for numerical
+  # stability). Uses the "DEzs" sampler (Differential-Evolution MCMC with
+  # multiple chains), which is more robust than plain Metropolis-Hastings
+  # for a piecewise-constant (step-like) RF surface.
+  #   n          - desired number of samples (after burn-in)
+  #   rf_fit     - randomForest object
+  #   sl_max     - upper bound of the sl range
+  #   burn_in    - number of initial iterations to discard
+  #   iterations - total MCMC iterations; if NULL, set to burn_in + n * 5
+  # Returns: a list with
+  #   samples  - matrix with columns "sl" and "ta"
+  #   mcmc_out - the full BayesianTools MCMC object (e.g. for
+  #              BayesianTools::tracePlot() or gelmanDiagnostics())
   bayesianToolsSampleDensitySurface <- function(n, rf_fit, sl_max,
-                                                burn_in = 1000,
+                                                burn_in    = 1000,
                                                 iterations = NULL) {
 
-    # Zielfunktion fuer BayesianTools: nimmt einen Parametervektor
-    # par = c(sl, ta) entgegen und gibt einen einzelnen log-Dichtewert zurueck.
     log_density_fn <- function(par) {
       sl_val <- par[1]
       ta_val <- par[2]
 
-      # Harte Grenzen: liegt der Vorschlag ausserhalb des gueltigen Bereichs,
-      # ist die Wahrscheinlichkeit 0 -> log(0) = -Inf. BayesianTools lehnt
-      # solche Vorschlaege dann automatisch ab.
+      # Hard bounds: proposals outside the valid range get probability 0
+      # (log(0) = -Inf) and are rejected
       if (sl_val < 0 || sl_val > sl_max || ta_val < -pi || ta_val > pi) {
         return(-Inf)
       }
 
       dens <- evalDensitySurfaceRF(sl_val, ta_val, rf_fit)
-      # + 1e-10 verhindert log(0) = -Inf an Stellen, wo der RF exakt 0 vorhersagt
+      # + 1e-10 avoids log(0) = -Inf where the RF predicts exactly 0.
       log(dens + 1e-10)
     }
 
-    # createBayesianSetup() definiert das Optimierungs-/Sampling-Problem:
-    # likelihood = unsere log-Dichte-Funktion, lower/upper = der Suchraum
-    # (entspricht dem Definitionsbereich von sl und ta).
     bayesianSetup <- BayesianTools::createBayesianSetup(
       likelihood = log_density_fn,
       lower      = c(0, -pi),
@@ -285,38 +279,22 @@ createRandomSteps <- function(x,
 
     if (is.null(iterations)) iterations <- burn_in + n * 5
 
-    # sampler = "DEzs": Differential-Evolution-MCMC mit mehreren parallelen
-    # Chains. Das ist robuster als ein einfaches Metropolis-Hastings, vor
-    # allem weil Random-Forest-Vorhersagen stueckweise konstant sind (treppig)
-    # und ein einfacher Sampler sich dort leicht "festfahren" kann.
     settings <- list(iterations = iterations, burnin = burn_in, message = FALSE)
 
     mcmc_out <- BayesianTools::runMCMC(bayesianSetup = bayesianSetup,
                                        sampler       = "DEzs",
                                        settings      = settings)
 
-    # getSample() extrahiert die gezogenen Parameterwerte aus allen Chains,
-    # der Burn-in-Bereich (start = burn_in + 1) wird dabei ausgeschlossen.
     samples_matrix <- BayesianTools::getSample(mcmc_out, start = burn_in + 1)
     colnames(samples_matrix) <- c("sl", "ta")
 
-    # Falls mehr Samples vorhanden sind als benoetigt (n), zufaellig die
-    # gewuenschte Anzahl auswaehlen.
+    # If more samples than needed:
     if (nrow(samples_matrix) > n) {
-      keep <- sample(seq_len(nrow(samples_matrix)), n)
+      keep           <- sample(seq_len(nrow(samples_matrix)), n)
       samples_matrix <- samples_matrix[keep, , drop = FALSE]
     }
 
-    # Falls WENIGER Samples vorhanden sind als benoetigt (n): BayesianTools'
-    # DEzs-Sampler verwaltet Chains/Population-Groesse intern selbst, daher
-    # entspricht die tatsaechliche Anzahl an Samples nach Abzug des Burn-in
-    # nicht immer exakt "iterations - burn_in" - das passiert vor allem bei
-    # kleinen angefragten n (z.B. n_control = 1). Wir gleichen das hier durch
-    # Ziehen MIT Zuruecklegen (replace = TRUE) aus den vorhandenen Samples
-    # aus, statt einen Fehler zu werfen. Das ist statistisch unproblematisch,
-    # da die vorhandenen Samples bereits (nach Burn-in) aus der Zielverteilung
-    # stammen - "mit Zuruecklegen ziehen" entspricht einem klassischen
-    # Bootstrap und aendert die zugrunde liegende Verteilung nicht.
+    # If fewer samples than needed:
     if (nrow(samples_matrix) < n) {
       warning(
         "BayesianTools MCMC returned only ", nrow(samples_matrix),
@@ -335,42 +313,37 @@ createRandomSteps <- function(x,
   }
 
 
-  # missing() muss VOR der naechsten Zeile (match.arg()) aufgerufen werden:
-  # match.arg() bindet sl_transform neu (auf den ersten Default-Wert, falls
-  # nichts uebergeben wurde), und danach laesst sich nicht mehr unterscheiden,
-  # ob der Nutzer den Parameter explizit gesetzt hat oder der Default
-  # einfach so "durchgereicht" wurde.
+  # Validation:
   sl_transform_was_set <- !missing(sl_transform)
   sl_transform <- match.arg(sl_transform)
 
-  # --- Validierung (wie bisher) ---
   if (!inherits(x, c("steps_xy", "steps_xyt", "track_xy", "track_xyt"))) {
-    stop("`x` must be an amt `steps_xy`, `steps_xyt`, `track_xy`, or `track_xyt` object.")}
+    stop("`x` must be an amt `steps_xy`, `steps_xyt`, `track_xy`, or `track_xyt` object.")
+  }
   if (!is.numeric(n_control) || length(n_control) != 1L ||
       n_control != floor(n_control) || n_control < 1L) {
-    stop("`n_control` must be a single positive integer.")}
+    stop("`n_control` must be a single positive integer.")
+  }
   n_control <- as.integer(n_control)
 
   if (inherits(x, c("track_xy", "track_xyt")) &&
       !inherits(x, c("steps_xy", "steps_xyt"))) {
-    x <- amt::steps(x)}
+    x <- amt::steps(x)
+  }
   x$step_id_ <- seq_len(nrow(x))
-  estimator <- match.arg(estimator)
+  estimator  <- match.arg(estimator)
 
-  # sl_transform wirkt nur im "density_advanced"-Zweig (siehe weiter unten).
-  # Falls der Nutzer ihn trotzdem explizit gesetzt hat, aber einen anderen
-  # estimator gewaehlt hat, wuerde der Parameter sonst stillschweigend
-  # wirkungslos bleiben - das ist eine typische Quelle fuer "warum aendert
-  # sich nichts?"-Verwirrung, deshalb hier eine explizite Warnung.
+  # sl_transform only has an effect for "density_advanced"
   if (sl_transform_was_set && estimator != "density_advanced") {
     warning(
-      "`sl_transform` wird nur fuer `estimator = \"density_advanced\"` verwendet ",
-      "und wird hier ignoriert, da `estimator = \"", estimator, "\"` gewaehlt wurde.",
+      "`sl_transform` is only used for `estimator = \"density_advanced\"` ",
+      "and is ignored here, since `estimator = \"", estimator, "\"` was chosen.",
       call. = FALSE
     )
   }
 
-  # --- "traditional" (unveraendert) ---
+
+  # Branch I: estimator = "traditional"
   if (estimator == "traditional") {
     valid   <- !is.na(x$ta_) & !is.na(x$direction_p) & !is.na(x$sl_)
     x       <- x[valid, ]
@@ -384,18 +357,19 @@ createRandomSteps <- function(x,
       circular::circular(out$ta_),
       mu    = ta_fit$params$mu,
       kappa = ta_fit$params$kappa))
-    out$probability <- sl_prob * ta_prob
+    out$density <- sl_prob * ta_prob
     class(out) <- c("random_steps_prop", class(out))
-    return(out)}
+    return(out)
+  }
 
-  # Ab hier: "density" und "density_advanced" teilen sich die
-  # Vorverarbeitung (gueltige Zeilen herausfiltern, sl_max bestimmen)
+  # Preparations for the density-based estimators
   valid   <- !is.na(x$ta_) & !is.na(x$direction_p) & !is.na(x$sl_)
   x_valid <- x[valid, ]
   sl_max  <- max(x_valid$sl_) * 1.5
   n_obs   <- nrow(x_valid)
 
-  # --- "density" (KDE, unveraendert) ---
+
+  # Branch II: estimator = "density" (KDE)
   if (estimator == "density") {
 
     obs_movement <- cbind(sl = x_valid$sl_, ta = x_valid$ta_)
@@ -416,25 +390,25 @@ createRandomSteps <- function(x,
     sl_random    <- random_draws[, "sl"]
     ta_random    <- random_draws[, "ta"]
 
-    obs_idx <- rep(seq_len(n_obs), each = n_control)
+    obs_idx   <- rep(seq_len(n_obs), each = n_control)
     abs_angle <- x_valid$direction_p[obs_idx] + ta_random
     x2_random <- x_valid$x1_[obs_idx] + sl_random * cos(abs_angle)
     y2_random <- x_valid$y1_[obs_idx] + sl_random * sin(abs_angle)
 
-    random_tbl <- x_valid[obs_idx, ]
-    random_tbl$x2_ <- x2_random
-    random_tbl$y2_ <- y2_random
-    random_tbl$sl_ <- sl_random
-    random_tbl$ta_ <- ta_random
-    random_tbl$case_ <- FALSE
+    random_tbl          <- x_valid[obs_idx, ]
+    random_tbl$x2_      <- x2_random
+    random_tbl$y2_      <- y2_random
+    random_tbl$sl_      <- sl_random
+    random_tbl$ta_      <- ta_random
+    random_tbl$case_    <- FALSE
     random_tbl$step_id_ <- rep(x_valid$step_id_, each = n_control)
-    random_tbl$probability <- stats::predict(kde_fit, x = cbind(sl_random, ta_random))
+    random_tbl$density  <- stats::predict(kde_fit, x = cbind(sl_random, ta_random))
 
-    obs_tbl <- x_valid
-    obs_tbl$case_ <- TRUE
-    obs_tbl$probability <- stats::predict(kde_fit, x = cbind(x_valid$sl_, x_valid$ta_))
+    obs_tbl         <- x_valid
+    obs_tbl$case_   <- TRUE
+    obs_tbl$density <- stats::predict(kde_fit, x = cbind(x_valid$sl_, x_valid$ta_))
 
-    core_cols <- c("step_id_", "case_", "probability", "x1_", "x2_", "y1_", "y2_", "sl_", "ta_")
+    core_cols <- c("step_id_", "case_", "density", "x1_", "x2_", "y1_", "y2_", "sl_", "ta_")
     time_cols <- intersect(c("t1_", "t2_", "dt_"), names(x_valid))
     keep_cols <- c(core_cols, time_cols)
 
@@ -449,49 +423,51 @@ createRandomSteps <- function(x,
       setdiff(class(out), c("random_steps_prop", "random_steps",
                             "steps_xyt", "steps_xy"))
     )
+    attr(out, "n_control") <- n_control
     return(out)
   }
 
-  # --- "density_advanced" (Random Forest + BayesianTools) ---
+
+  # Branch III: estimator = "density_advanced" (Random Forest + BayesianTools)
   if (estimator == "density_advanced") {
 
-    # 1. Glatte (bzw. hier: stueckweise konstante) Dichte-Landschaft fitten
+    # 1. Fit the density landscape
     rf_fit <- fitDensitySurfaceRF(x_valid$sl_, x_valid$ta_, sl_max,
                                   n_bins_sl    = rf_n_bins,
                                   n_bins_ta    = rf_n_bins,
                                   ntree        = rf_ntree,
                                   sl_transform = sl_transform)
 
-    # 2. Normierungskonstante schaetzen (Integral der Flaeche = 1 erzwingen)
+    # 2. Estimate the normalizing constant
     Z <- estimateNormalizingConstantRF(rf_fit, sl_max)
 
-    # 3. Random Steps aus der normierten Flaeche samplen
-    n_total <- n_obs * n_control
+    # 3. Draw random steps from the normalized surface
+    n_total   <- n_obs * n_control
     mh_result <- bayesianToolsSampleDensitySurface(n_total, rf_fit, sl_max,
                                                    burn_in = mcmc_burn_in)
     sl_random <- mh_result$samples[, "sl"]
     ta_random <- mh_result$samples[, "ta"]
 
-    # 4. Endkoordinaten rekonstruieren (analog zu den anderen Branches)
-    obs_idx <- rep(seq_len(n_obs), each = n_control)
+    # 4. Reconstruct end coordinates
+    obs_idx   <- rep(seq_len(n_obs), each = n_control)
     abs_angle <- x_valid$direction_p[obs_idx] + ta_random
     x2_random <- x_valid$x1_[obs_idx] + sl_random * cos(abs_angle)
     y2_random <- x_valid$y1_[obs_idx] + sl_random * sin(abs_angle)
 
-    random_tbl <- x_valid[obs_idx, ]
-    random_tbl$x2_ <- x2_random
-    random_tbl$y2_ <- y2_random
-    random_tbl$sl_ <- sl_random
-    random_tbl$ta_ <- ta_random
-    random_tbl$case_ <- FALSE
+    random_tbl          <- x_valid[obs_idx, ]
+    random_tbl$x2_      <- x2_random
+    random_tbl$y2_      <- y2_random
+    random_tbl$sl_      <- sl_random
+    random_tbl$ta_      <- ta_random
+    random_tbl$case_    <- FALSE
     random_tbl$step_id_ <- rep(x_valid$step_id_, each = n_control)
-    random_tbl$probability <- evalDensitySurfaceRF(sl_random, ta_random, rf_fit) / Z
+    random_tbl$density  <- pmax(evalDensitySurfaceRF(sl_random, ta_random, rf_fit) / Z, 1e-10)
 
-    obs_tbl <- x_valid
-    obs_tbl$case_ <- TRUE
-    obs_tbl$probability <- evalDensitySurfaceRF(x_valid$sl_, x_valid$ta_, rf_fit) / Z
+    obs_tbl         <- x_valid
+    obs_tbl$case_   <- TRUE
+    obs_tbl$density <- pmax(evalDensitySurfaceRF(x_valid$sl_, x_valid$ta_, rf_fit) / Z, 1e-10)
 
-    core_cols <- c("step_id_", "case_", "probability", "x1_", "x2_", "y1_", "y2_", "sl_", "ta_")
+    core_cols <- c("step_id_", "case_", "density", "x1_", "x2_", "y1_", "y2_", "sl_", "ta_")
     time_cols <- intersect(c("t1_", "t2_", "dt_"), names(x_valid))
     keep_cols <- c(core_cols, time_cols)
 
@@ -506,17 +482,11 @@ createRandomSteps <- function(x,
       setdiff(class(out), c("random_steps_prop", "random_steps",
                             "steps_xyt", "steps_xy"))
     )
+    attr(out, "n_control") <- n_control
 
-    # MCMC-Objekt als Attribut anhaengen, damit man spaeter Diagnostik
-    # (Trace-Plots, Gelman-Rubin) durchfuehren kann, ohne die Funktion
-    # erneut aufrufen zu muessen.
+    # Attach the MCMC object as an attribute for later diagnostics
     attr(out, "mcmc_out") <- mh_result$mcmc_out
 
     return(out)
   }
 }
-
-
-
-
-
