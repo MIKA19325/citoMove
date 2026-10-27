@@ -178,3 +178,32 @@ head(track1)
 # can leave the plotted area (see "Boundaries" in ?simulateTrack).
 graphics::points(track1$x_[1], track1$y_[1], pch = 16, col = "red")
 graphics::lines(track1$x_, track1$y_, col = "red")
+
+# The same function can also simulate on a landscape without toroidal
+# wrapping (torus = FALSE): candidate steps outside the layers cannot be
+# chosen, so the track stays inside the layers. With kernelAsMatrix = TRUE,
+# the kernel function receives the whole window as a matrix (row 1 = north,
+# column 1 = west) and can therefore react to the spatial arrangement of the
+# cells, here the contrast between the centre cell and its 8 neighbours.
+# With returnChoiceSets = TRUE all candidate steps are stored in the
+# attribute "choiceSets" of the track.
+centreContrast <- function(m) m[2, 2] - mean(m[-5])   # for a 3 x 3 window
+
+track2 <- simulateTrack(
+  xStart                = centerX,
+  yStart                = centerY,
+  crs                   = "EPSG:25833",
+  nSteps                = 50,
+  numericLayers         = numLayers,
+  betas                 = c(2, -1),
+  imageLayers           = imgLayers,
+  imageKernelDimensions = c(3),
+  imageKernelFunctions  = list(f1 = centreContrast),
+  imageBetas            = c(3),
+  torus                 = FALSE,
+  kernelAsMatrix        = TRUE,
+  returnChoiceSets      = TRUE
+)
+
+choiceSets <- attr(track2, "choiceSets")
+head(choiceSets)

@@ -23,7 +23,10 @@ simulateTrack(
   imageKernelFunctions = list(f1 = mean),
   imageBetas = c(3),
   scaleNumericLayers = TRUE,
-  scaleImageLayers = TRUE
+  scaleImageLayers = TRUE,
+  torus = TRUE,
+  kernelAsMatrix = FALSE,
+  returnChoiceSets = FALSE
 )
 }
 \arguments{
@@ -74,17 +77,20 @@ step (value of a single cell).}
 avoidance. Ignored if \code{numericLayers = NULL}.}
 
 \item{imageLayers}{\code{NULL} or a \code{SpatRasterCollection}. Layers evaluated
-over a square window (kernel) of cells centred on the end point of each
+over a square window (kernel) of cells around the end point of each
 candidate step; the cell values in the window are aggregated to a single
 value with the corresponding function in \code{imageKernelFunctions}.}
 
-\item{imageKernelDimensions}{Vector of odd positive integers, one per layer
-in \code{imageLayers}. Side length of the kernel window in cells (e.g. \code{3}
-gives a 3 x 3 window).}
+\item{imageKernelDimensions}{Vector of positive integers, one per layer in
+\code{imageLayers}. Side length of the kernel window in cells (e.g. \code{3} gives
+a 3 x 3 window). Odd values give a window centred on the cell that
+contains the end point; even values give a window centred on the end
+point itself (same cells as \code{\link[=extractStepImagekernels]{extractStepImagekernels()}}).}
 
 \item{imageKernelFunctions}{List of functions, one per layer in
-\code{imageLayers}. Each function takes a numeric vector (the cell values in
-the window) and returns a single number, e.g. \code{mean} or \code{max}.}
+\code{imageLayers}. Each function takes the cell values in the window and
+returns a single number, e.g. \code{mean} or \code{max}. The values are passed as a
+numeric vector, or as a matrix if \code{kernelAsMatrix = TRUE}.}
 
 \item{imageBetas}{Numeric vector with one selection coefficient per layer in
 \code{imageLayers}. Same interpretation as \code{betas}.}
@@ -95,11 +101,37 @@ shared extent of all layers, so that \code{betas} are comparable across layers.}
 
 \item{scaleImageLayers}{Logical. If \code{TRUE} (default), each image layer is
 rescaled to the range 0 to 1 in the same way.}
+
+\item{torus}{Logical. If \code{TRUE} (default), the landscape is treated as a
+torus: candidate end points and kernel windows beyond an edge of the
+layers take the values from the opposite edge. If \code{FALSE}, the layers are
+not wrapped and candidates outside the layers cannot be chosen (see
+Details), so the track stays inside the layers.}
+
+\item{kernelAsMatrix}{Logical. If \code{FALSE} (default), each function in
+\code{imageKernelFunctions} receives the cell values of the window as a numeric
+vector (missing cells removed). If \code{TRUE}, it receives the complete window
+as a matrix with \code{imageKernelDimensions} rows and columns (row 1 = north,
+column 1 = west), so that selection can depend on the spatial arrangement
+of the cells within the window, e.g. on the contrast between centre and
+surroundings. Windows containing missing cells then give \code{NA}. Applies to
+all image layers.}
+
+\item{returnChoiceSets}{Logical. If \code{TRUE}, all candidate steps of all
+steps are returned as attribute \code{"choiceSets"} of the track (see Value).
+Default \code{FALSE}.}
 }
 \value{
 A \code{track_xyt} object (see \code{\link[amt:track]{amt::make_track()}}) with columns \code{x_},
 \code{y_} and \code{t_} and \code{nSteps + 1} rows (the starting location plus one
-location per step).
+location per step), or fewer rows if the simulation ended early (see
+Details). If \code{returnChoiceSets = TRUE}, the track carries the attribute
+\code{"choiceSets"}, a \code{data.frame} with one row per candidate step and the
+columns \code{step}, \code{candidate}, \code{x}, \code{y}, one column per numeric layer
+(\verb{num_<layer name>}), one column per image layer (\verb{img_<layer name>},
+the aggregated kernel value), \code{linpred} (linear predictor) and \code{chosen}
+(\code{TRUE} for the realised step). It can be accessed with
+\code{attr(track, "choiceSets")}.
 }
 \description{
 Simulates an animal track with known movement and habitat selection
@@ -125,12 +157,21 @@ lengths and turning angles of the realised track therefore differ from the
 gamma and von Mises distributions whenever selection coefficients are not
 zero.
 
-\strong{Boundaries.} All layers are cropped to their shared extent. Candidate
-end points beyond an edge of this extent are evaluated on a torus, i.e. they
-take the values from the opposite edge. The coordinates stored in the
-returned track are \emph{not} wrapped, so the track is a continuous path that can
-leave the extent of the layers. When covariates are later extracted with
-\code{\link[=extractStepCovariates]{extractStepCovariates()}}, end points outside the layers are set to \code{NA}.
+\strong{Boundaries.} All layers are cropped to their shared extent. With
+\code{torus = TRUE}, candidate end points beyond an edge of this extent are
+evaluated on a torus, i.e. they take the values from the opposite edge. The
+coordinates stored in the returned track are \emph{not} wrapped, so the track is
+a continuous path that can leave the extent of the layers. When covariates
+are later extracted with \code{\link[=extractStepCovariates]{extractStepCovariates()}}, end points outside the
+layers are set to \code{NA}. With \code{torus = FALSE}, end points and kernel windows
+are not wrapped; candidates whose end point or kernel window lies (partly)
+outside the layers get no habitat value.
+
+\strong{Missing values.} Candidates without a complete habitat value (\code{NA} in
+the linear predictor, e.g. outside the layers with \code{torus = FALSE} or on
+\code{NA} cells) get selection probability 0. If no candidate of a step has a
+complete habitat value, the simulation stops with a warning and the track
+is returned up to the last completed step.
 
 \strong{Scaling.} Coefficients are only comparable across layers if all layers
 are on the same scale, i.e. if \code{scaleNumericLayers} and \code{scaleImageLayers}
@@ -139,16 +180,20 @@ over its full extent, whereas this function rescales over the shared extent
 of all layers; use layers with identical extents if covariates extracted
 afterwards are to be on exactly the same scale as during simulation.
 
-\strong{Internal helpers.} Three helper functions, defined at the top of the
+\strong{Internal helpers.} Six helper functions, defined at the top of the
 function body, compute the habitat score of each candidate:
 \itemize{
+\item \code{sameExtent()} checks whether a layer already has the shared extent, so
+that it is not cropped unnecessarily.
 \item \code{cropScaleRaster()} crops a layer to the shared extent of all layers and,
 if requested, rescales its values to the range 0 to 1.
 \item \code{extractKernelValues()} reads the square window of cells around each
 candidate end point and aggregates it with the kernel function.
-\item \code{computeImageValues()} applies \code{extractKernelValues()} to all image
-layers, multiplies each result with its coefficient and sums them to one
-image score per candidate.
+\item \code{numericValueMatrix()} and \code{imageValueMatrix()} return the value of every
+numeric layer and the kernel value of every image layer for all
+candidates, one column per layer.
+\item \code{linearPredictor()} multiplies each column with its coefficient and sums
+them to one habitat score per candidate.
 }
 
 A progress message is printed every 1000 steps. Results are random; use
@@ -335,9 +380,39 @@ head(track1)
 # can leave the plotted area (see "Boundaries" in ?simulateTrack).
 graphics::points(track1$x_[1], track1$y_[1], pch = 16, col = "red")
 graphics::lines(track1$x_, track1$y_, col = "red")
+
+# The same function can also simulate on a landscape without toroidal
+# wrapping (torus = FALSE): candidate steps outside the layers cannot be
+# chosen, so the track stays inside the layers. With kernelAsMatrix = TRUE,
+# the kernel function receives the whole window as a matrix (row 1 = north,
+# column 1 = west) and can therefore react to the spatial arrangement of the
+# cells, here the contrast between the centre cell and its 8 neighbours.
+# With returnChoiceSets = TRUE all candidate steps are stored in the
+# attribute "choiceSets" of the track.
+centreContrast <- function(m) m[2, 2] - mean(m[-5])   # for a 3 x 3 window
+
+track2 <- simulateTrack(
+  xStart                = centerX,
+  yStart                = centerY,
+  crs                   = "EPSG:25833",
+  nSteps                = 50,
+  numericLayers         = numLayers,
+  betas                 = c(2, -1),
+  imageLayers           = imgLayers,
+  imageKernelDimensions = c(3),
+  imageKernelFunctions  = list(f1 = centreContrast),
+  imageBetas            = c(3),
+  torus                 = FALSE,
+  kernelAsMatrix        = TRUE,
+  returnChoiceSets      = TRUE
+)
+
+choiceSets <- attr(track2, "choiceSets")
+head(choiceSets)
 }
 \seealso{
-\code{\link[=createRandomSteps]{createRandomSteps()}}, \code{\link[=extractStepCovariates]{extractStepCovariates()}}
+\code{\link[=createRandomSteps]{createRandomSteps()}}, \code{\link[=extractStepCovariates]{extractStepCovariates()}},
+\code{\link[=extractStepImagekernels]{extractStepImagekernels()}}
 }
 \author{
 Mika Schubert

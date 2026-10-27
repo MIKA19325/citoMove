@@ -103,13 +103,34 @@ test_that("simulateTrack: error if length of betas differs from number of layers
   )
 })
 
-test_that("simulateTrack: error if imageKernelDimension is even", {
+test_that("simulateTrack: error if imageKernelDimensions is not a positive integer", {
   img_sprc <- make_sprc(make_raster())
   expect_error(
     simulateTrack(numericLayers = base_sprc, betas = 1,
                   imageLayers = img_sprc, imageBetas = 1,
-                  imageKernelDimensions = c(4)),
-    "odd"
+                  imageKernelDimensions = c(2.5)),
+    "positive integers"
+  )
+  expect_error(
+    simulateTrack(numericLayers = base_sprc, betas = 1,
+                  imageLayers = img_sprc, imageBetas = 1,
+                  imageKernelDimensions = c(0)),
+    "positive integers"
+  )
+})
+
+test_that("simulateTrack: error if torus, kernelAsMatrix or returnChoiceSets is not TRUE/FALSE", {
+  expect_error(
+    simulateTrack(numericLayers = base_sprc, betas = 1, torus = "yes"),
+    "torus"
+  )
+  expect_error(
+    simulateTrack(numericLayers = base_sprc, betas = 1, kernelAsMatrix = NA),
+    "kernelAsMatrix"
+  )
+  expect_error(
+    simulateTrack(numericLayers = base_sprc, betas = 1, returnChoiceSets = c(TRUE, FALSE)),
+    "returnChoiceSets"
   )
 })
 
@@ -222,4 +243,118 @@ test_that("simulateTrack: image kernels at the layer edge are wrapped toroidally
     )
   )
   expect_false(any(is.na(track$x_)))
+})
+
+# Function: simulateTrack (new options: even kernels, torus, kernelAsMatrix,
+# returnChoiceSets)
+
+test_that("simulateTrack: even imageKernelDimensions are accepted", {
+  img_sprc <- make_sprc(make_raster(ext = c(-100, 100, -100, 100),
+                                    ncols = 50, nrows = 50))
+  expect_no_error(
+    simulateTrack(
+      numericLayers         = NULL,
+      imageLayers           = img_sprc,
+      imageBetas            = 1,
+      imageKernelDimensions = 4,
+      imageKernelFunctions  = list(mean),
+      nSteps = 10, nChoiceSet = 10
+    )
+  )
+})
+
+test_that("simulateTrack: torus = FALSE keeps the track inside the layers", {
+  set.seed(1)
+  expect_no_warning(
+    track <- simulateTrack(
+      numericLayers = base_sprc, betas = 1,
+      xStart = 95, yStart = 95,
+      scaleSL = 5, kappaTA = 0, torus = FALSE,
+      nSteps = 50, nChoiceSet = 50
+    )
+  )
+  expect_equal(nrow(track), 51)
+  expect_true(all(track$x_ >= -100 & track$x_ <= 100))
+  expect_true(all(track$y_ >= -100 & track$y_ <= 100))
+})
+
+test_that("simulateTrack: track ends early with a warning if no candidate is valid", {
+  small_sprc <- make_sprc(make_raster(ext = c(-1, 1, -1, 1)))
+  expect_warning(
+    track <- simulateTrack(
+      numericLayers = small_sprc, betas = 1,
+      scaleSL = 1000, torus = FALSE,
+      nSteps = 10, nChoiceSet = 10
+    ),
+    "Track ended"
+  )
+  expect_equal(nrow(track), 1)
+})
+
+test_that("simulateTrack: kernelAsMatrix passes the window as a matrix", {
+  img_sprc <- make_sprc(make_raster(ext = c(-100, 100, -100, 100),
+                                    ncols = 50, nrows = 50))
+  checkMatrix <- function(m) {
+    stopifnot(is.matrix(m), nrow(m) == 4, ncol(m) == 4)
+    mean(m)
+  }
+  expect_no_error(
+    simulateTrack(
+      numericLayers         = NULL,
+      imageLayers           = img_sprc,
+      imageBetas            = 1,
+      imageKernelDimensions = 4,
+      imageKernelFunctions  = list(checkMatrix),
+      kernelAsMatrix        = TRUE,
+      nSteps = 10, nChoiceSet = 10
+    )
+  )
+})
+
+test_that("simulateTrack: kernelAsMatrix has row 1 = north and column 1 = west", {
+  img_r    <- make_raster(ext = c(-100, 100, -100, 100), ncols = 50, nrows = 50)
+  img_sprc <- make_sprc(img_r)
+  track <- simulateTrack(
+    numericLayers         = NULL,
+    imageLayers           = img_sprc,
+    imageBetas            = 1,
+    imageKernelDimensions = 3,
+    imageKernelFunctions  = list(function(m) m[1, 1]),   # north-west cell
+    kernelAsMatrix        = TRUE,
+    returnChoiceSets      = TRUE,
+    nSteps = 10, nChoiceSet = 10
+  )
+  cs       <- attr(track, "choiceSets")
+  imgCol   <- cs[[grep("^img_", names(cs))]]
+  cellSize <- terra::res(img_r)[1]
+  # value one cell west and one cell north of each candidate, scaled to (0, 1)
+  # in the same way as inside simulateTrack()
+  expected <- terra::extract(img_r, cbind(cs$x - cellSize, cs$y + cellSize))[, 1]
+  expected <- (expected - 1) / (terra::ncell(img_r) - 1)
+  expect_equal(imgCol, expected)
+})
+
+test_that("simulateTrack: returnChoiceSets returns one row per candidate", {
+  nS <- 5
+  nC <- 10
+  track <- simulateTrack(
+    numericLayers = base_sprc, betas = 1,
+    returnChoiceSets = TRUE,
+    nSteps = nS, nChoiceSet = nC
+  )
+  cs <- attr(track, "choiceSets")
+  expect_s3_class(cs, "data.frame")
+  expect_equal(nrow(cs), nS * nC)
+  expect_equal(sum(cs$chosen), nS)
+  # the chosen candidates are exactly the locations of the track
+  expect_equal(cs$x[cs$chosen], track$x_[-1])
+  expect_equal(cs$y[cs$chosen], track$y_[-1])
+})
+
+test_that("simulateTrack: no choiceSets attribute by default", {
+  track <- simulateTrack(
+    numericLayers = base_sprc, betas = 1,
+    nSteps = 5, nChoiceSet = 5
+  )
+  expect_null(attr(track, "choiceSets"))
 })
