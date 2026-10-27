@@ -227,7 +227,7 @@ track <- simulateTrack(
   tStart                = as.POSIXct("2026-01-01 00:00:00", tz = "UTC"),
   timeStep              = "hour",
   angleStart            = 0,
-  nSteps                = 100,
+  nSteps                = 50,
   nChoiceSet            = 100,
   scaleSL               = 1,
   shapeSL               = 2,

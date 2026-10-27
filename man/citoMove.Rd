@@ -27,5 +27,10 @@ Authors:
   \item Johannes Signer (\href{https://orcid.org/0000-0002-1771-7775}{ORCID})
 }
 
+Other contributors:
+\itemize{
+  \item Mika Schubert [contributor]
+}
+
 }
 \keyword{internal}

@@ -18,7 +18,10 @@ Authors@R:
      person(given = "Johannes",
              family = "Signer",
              role = "aut", 
-            comment = c(ORCID = "0000-0002-1771-7775"))
+            comment = c(ORCID = "0000-0002-1771-7775")),
+     person(given = "Mika",
+             family = "Schubert",
+             role = "ctb")            
            )
 Description: citoMove is a wrapper for the cito R package. The 'cito' package provides a user-friendly interface for training and interpreting deep neural networks (DNN). The citoMove package extends cito with an interface to fit a conditional logit (clogit) likelihood with the purpose of fitting step selection function (ssf) models of animal movement.
 License: GPL (>= 3) + file LICENSE
